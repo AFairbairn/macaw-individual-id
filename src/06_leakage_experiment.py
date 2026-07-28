@@ -1,13 +1,13 @@
 #!/usr/bin/env python
 """
-06_leakage_ablation.py
+06_leakage_experiment.py
 
 PURPOSE
     Demonstrate, within one species, that the amount a random split inflates a
     result is set by how many calls are cut from each recording.
 
 USAGE
-    python src/06_leakage_ablation.py
+    python src/06_leakage_experiment.py
 
 INPUT
     config.yaml
@@ -15,10 +15,7 @@ INPUT
     bacpipe_results/ag/embeddings/
 
 OUTPUT
-    results/diagnostics/leakage_ablation.csv
-
-RUNTIME
-    About 5 minutes on 8 CPU cores. No GPU is needed.
+    results/diagnostics/leakage_experiment.csv
 
 WHY THIS EXISTS
     05_diagnostics.py reports that the two datasets differ in calls per
@@ -45,20 +42,20 @@ THE DESIGN
     the bird set is identical in every row. Each condition is repeated over
     several random draws and the mean is reported.
 
-    This is an ablation of one design variable with everything else fixed, which
-    is the standard form of this kind of experiment. Gallego et al. (2026) use
-    the same form for temporal order and for aggregation method, and Huang et
-    al. (2024) for input length.
+    The design changes one variable and holds everything else the same. That is
+    the standard form of this kind of experiment. Gallego et al. (2026) use the
+    same form for temporal order and for aggregation method, and Huang et al.
+    (2024) for input length.
 
 RESULT
-    The leakage delta rises monotonically from 0.05 to 0.34, a factor of about
-    7, as calls per recording goes from 2 to 6. Spearman correlation +1.00.
+    The leakage delta rises from 0.059 to 0.333 as calls per recording goes
+    from 2 to 6. The rise is monotonic. Spearman correlation +1.00, p < 0.0001.
 
 CAUTION
     The controlled design costs sample size. Only the birds that support every
     condition are used, and each condition uses 12 calls for each of those
     birds. Report the bird count and the call count with the result. The trend
-    is the finding; the absolute values are not comparable to the main table.
+    is the finding. The absolute values are not comparable to the main table.
 """
 import os
 from pathlib import Path
@@ -234,7 +231,7 @@ def main():
     table = pd.DataFrame(rows)
     out_dir = ROOT / "results/diagnostics"
     out_dir.mkdir(parents=True, exist_ok=True)
-    table.to_csv(out_dir / "leakage_ablation.csv", index=False)
+    table.to_csv(out_dir / "leakage_experiment.csv", index=False)
 
     print(table.round(3).to_string(index=False))
 
@@ -250,7 +247,7 @@ def main():
         )
 
     print()
-    print(f"Wrote {out_dir}/leakage_ablation.csv")
+    print(f"Wrote {out_dir}/leakage_experiment.csv")
     return 0
 
 
