@@ -257,6 +257,10 @@ say "STAGE 5 of 5   Diagnostics and manifest   [CPU, 20 minutes]"
 # figures. This pipeline produces data only. Figures are made separately.
 python src/05_diagnostics.py
 
+# The leakage ablation. Demonstrates the mechanism within one species, with
+# birds, room, repertoire and calls per bird all held constant.
+python src/06_leakage_ablation.py
+
 # The supplementary bout comparison. It runs only when the supplementary audio
 # is present, and it never enters a main result.
 python src/09_supplementary_bouts.py

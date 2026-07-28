@@ -81,17 +81,28 @@ THE THREE DIAGNOSTICS
        almost always puts some of them in training and the rest in test, and the
        model can learn the recording.
 
-       This is measurable from the metadata alone, with no model involved:
+       Two statistics are reported, and only the second one is useful.
 
-           P(leak) = 1 - 1 / (mean calls per recording)
+       P(any sibling in training). For a call from a recording contributing k
+       calls, each sibling falls outside the test fold with probability 4/5
+       under 5-fold, so
 
-       is the approximate chance that a test call has a sibling from the same
-       recording in the training set.
+           P = 1 - (1/5)^(k-1),  averaged over calls.
 
-       Result across our two datasets:
+       This is exact, but it SATURATES. Both datasets sit near 1 (aa 0.73,
+       ag 0.99), so it cannot explain a 2.5-fold difference in the delta. It is
+       reported for completeness, not as the mechanism.
 
-           A. ambiguus     2.3 calls per recording   P(leak) 0.56   delta 0.10
-           A. glaucogularis 13.5 calls per recording  P(leak) 0.93   delta 0.24-0.29
+       Expected number of siblings in training, E = 0.8 * (k-1), averaged over
+       calls. This does not saturate and it tracks the delta:
+
+           A. ambiguus       2.6 expected siblings   delta 0.10
+           A. glaucogularis 11.7 expected siblings   delta 0.24-0.29
+
+       CAUTION on the median. The median calls per recording is 1 for aa, but
+       that is a median over RECORDINGS. Only 22 percent of aa CALLS have no
+       sibling at all, because the many single-call recordings contribute few
+       calls in total. Do not write that most aa calls cannot leak.
 
        WHY THE TWO DATASETS DIFFER, and why it generalises. The two sets were
        collected for different purposes. The A. ambiguus set was collected for
@@ -436,8 +447,13 @@ def split_structure(species):
     calls per recording, a random split nearly always puts some in training and
     the rest in test.
 
-    p_leak approximates the chance that a test call has a sibling from the same
-    recording in the training set.
+    Two statistics are returned.
+
+    p_any_sibling_in_train is exact under 5-fold but saturates near 1 for both
+    datasets, so it does not explain their different leakage deltas.
+
+    expected_siblings_in_train does not saturate and does track the deltas. It
+    is the one to report.
     """
     path = DATA / f"{species}/metadata/{species}_master.csv"
     table = pd.read_csv(path, dtype=str)
@@ -451,7 +467,9 @@ def split_structure(species):
     for name, subset in subsets:
         per_recording = subset.groupby("recording_id").size()
         per_bird = subset.groupby("bird")["recording_id"].nunique()
-        mean_calls = float(per_recording.mean())
+        # k for the recording each individual call came from.
+        k = per_recording.reindex(subset["recording_id"]).to_numpy()
+        test_fraction = 1.0 / N_FOLDS
         rows.append(
             {
                 "species": species,
@@ -459,9 +477,11 @@ def split_structure(species):
                 "n_calls": len(subset),
                 "n_recordings": int(subset["recording_id"].nunique()),
                 "calls_per_recording_median": float(per_recording.median()),
-                "calls_per_recording_mean": mean_calls,
+                "calls_per_recording_mean": float(per_recording.mean()),
                 "recordings_per_bird_median": float(per_bird.median()),
-                "p_leak": 1.0 - 1.0 / mean_calls if mean_calls > 0 else float("nan"),
+                "pct_calls_with_no_sibling": float(100 * np.mean(k == 1)),
+                "p_any_sibling_in_train": float(np.mean(1 - test_fraction ** (k - 1))),
+                "expected_siblings_in_train": float(np.mean((1 - test_fraction) * (k - 1))),
             }
         )
     return rows
@@ -522,7 +542,7 @@ def main():
     for row in structure_rows:
         print(f"  {row['species']}/{row['subset']:4} "
               f"{row['calls_per_recording_mean']:5.1f} calls per recording, "
-              f"p_leak = {row['p_leak']:.2f}")
+              f"{row['expected_siblings_in_train']:5.1f} expected siblings in training")
 
     if shift_rows:
         summary = pd.DataFrame(shift_rows).groupby(["species", "model"])["lift_over_chance"].mean()
