@@ -1,0 +1,156 @@
+#!/usr/bin/env python
+"""extract_embeddings.py - embed <audio_folder> with bacpipe.play() + 2 speech models.
+
+    python extract_embeddings.py <audio_folder>
+
+Each model writes one .npy per call under
+    bacpipe_results/<name>/embeddings/<ts>___<model>-<name>/.../<stem>_<model>.npy
+(the speech models are written the same way). classify.py reads those folders. No CSVs.
+"""
+import os
+os.environ["TF_USE_LEGACY_KERAS"] = "0"   # BirdNET ships a Keras-3 checkpoint
+import sys
+from pathlib import Path
+import numpy as np
+
+BACPIPE_MODELS = ["birdnet", "perch_bird", "perch_v2", "surfperch", "convnext_birdset",
+                  "audioprotopnet", "avesecho_passt", "birdmae", "birdaves_especies",
+                  "aves_especies", "beats", "biolingual", "audiomae"]
+SPEECH_MODELS = ["ecapa_tdnn", "wavlm_base_plus_sv"]
+SR = 16000
+
+# Models that MUST run on CPU. avesecho_passt moves the model to the device but
+# leaves the input audio on CPU, so on CUDA every file fails with a
+# "Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor)"
+# mismatch and it writes zero embeddings. On CPU input and weights match -> works.
+CPU_ONLY_MODELS = {"avesecho_passt"}
+
+
+def gpu_device():
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def set_bacpipe_device(dev):
+    """Write bacpipe's compute device into bacpipe/settings.yaml.
+
+    bacpipe reads its device from that file (ships as 'cpu') and does NOT
+    auto-detect CUDA, so its torch models otherwise run on CPU even on a GPU box.
+    We re-assert it before each model so a bacpipe reinstall can't strand us on
+    CPU. perch (JAX) and birdnet (TF) stay on CPU regardless - expected, and not
+    worth chasing with jax[cuda]. avesecho_passt is forced to CPU via
+    CPU_ONLY_MODELS (see note there).
+    """
+    import re
+    import bacpipe
+    p = Path(bacpipe.__file__).parent / "settings.yaml"
+    if p.is_file():
+        txt = p.read_text()
+        new = re.sub(r"(?m)^device:.*$", f"device: '{dev}'", txt)
+        if new != txt:
+            p.write_text(new)
+
+
+def run_bacpipe(audio_dir):
+    import bacpipe
+    gpu = gpu_device()
+    for m in BACPIPE_MODELS:
+        dev = "cpu" if m in CPU_ONLY_MODELS else gpu
+        set_bacpipe_device(dev)
+        print(f"=== bacpipe: {m} (device={dev}) ===", flush=True)
+        bacpipe.config.audio_dir = str(audio_dir)
+        bacpipe.config.models = [m]
+        bacpipe.config.dim_reduction_model = "None"
+        # We use only the saved .npy embeddings; bacpipe's post-embed evaluation +
+        # dashboard step is what throws the wall of "annotations.csv not found" /
+        # "dim_reduced_embeddings" / panel tracebacks. Turn it off at the source so
+        # the logs stay readable. Wrapped: if a bacpipe version lacks these knobs we
+        # just fall back to the try/except below. Embeddings are unaffected.
+        for _attr, _val in (("dashboard", False), ("evaluation_task", None)):
+            try:
+                setattr(bacpipe.config, _attr, _val)
+            except Exception:
+                pass
+        try:
+            bacpipe.play()
+        except Exception as e:
+            # play() runs an eval step after embedding; with dim_reduction_model
+            # "None" that step raises, but the .npy embeddings are already written.
+            # Catching here also means one bad model never stops the others.
+            print(f"  ({m}: post-embed step skipped: {type(e).__name__})", flush=True)
+
+
+def _load16k(path, device):
+    import torch, torchaudio
+    wav, sr = torchaudio.load(str(path))
+    if wav.shape[0] > 1:
+        wav = wav.mean(0, keepdim=True)
+    if sr != SR:
+        wav = torchaudio.transforms.Resample(sr, SR)(wav)
+    # Pad short clips to >=1 s. WavLMForXVector's conv + TDNN stack needs a minimum
+    # number of frames or it errors out on very short trimmed singles (the cause of
+    # ~75 missing wavlm embeddings). ECAPA tolerates short clips; trailing-silence
+    # padding is harmless to it. Both speech models therefore get a valid input.
+    if wav.shape[-1] < SR:
+        wav = torch.nn.functional.pad(wav, (0, SR - wav.shape[-1]))
+    return wav.to(device)
+
+
+def _encoder(model, device):
+    if model == "ecapa_tdnn":
+        from speechbrain.inference.speaker import EncoderClassifier
+        net = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir=".cache/spkrec-ecapa-voxceleb", run_opts={"device": device})
+        net.eval()
+        return lambda w: net.encode_batch(w).squeeze().detach().cpu().numpy()
+    from transformers import AutoFeatureExtractor, WavLMForXVector
+    proc = AutoFeatureExtractor.from_pretrained("microsoft/wavlm-base-plus-sv")
+    net = WavLMForXVector.from_pretrained("microsoft/wavlm-base-plus-sv").to(device)
+    net.eval()
+    def enc(w):
+        x = proc(w.squeeze().cpu().numpy(), sampling_rate=SR, return_tensors="pt")
+        x = {k: v.to(device) for k, v in x.items()}
+        return net(**x).embeddings.squeeze().detach().cpu().numpy()
+    return enc
+
+
+def run_speech(audio_dir):
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    wavs = sorted(audio_dir.rglob("*.wav"))
+    for m in SPEECH_MODELS:
+        print(f"=== speech: {m} ({len(wavs)} files, {device}) ===", flush=True)
+        out = Path("bacpipe_results") / audio_dir.name / "embeddings" / f"speech___{m}-{audio_dir.name}"
+        if out.is_dir() and len(list(out.rglob("*.npy"))) >= len(wavs):
+            print(f"  {m}: already complete, skipping", flush=True); continue
+        out.mkdir(parents=True, exist_ok=True)
+        try:
+            enc = _encoder(m, device)
+        except Exception as e:
+            print(f"  {m}: model load failed, skipping ({type(e).__name__}: {e})", flush=True); continue
+        for i, w in enumerate(wavs, 1):
+            try:
+                v = np.asarray(enc(_load16k(w, device))).reshape(-1)
+                dest = out / w.relative_to(audio_dir).parent / f"{w.stem}_{m}.npy"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                np.save(dest, v)
+            except Exception as e:
+                print(f"  {m} failed on {w.name}: {type(e).__name__}: {e}", flush=True)
+            if i % 100 == 0:
+                print(f"  {i}/{len(wavs)}", flush=True)
+
+
+def main():
+    audio_dir = Path(sys.argv[1]).resolve()
+    print(f"Audio: {audio_dir}", flush=True)
+    run_bacpipe(audio_dir)
+    run_speech(audio_dir)
+    print("DONE", flush=True)
+
+
+if __name__ == "__main__":
+    main()

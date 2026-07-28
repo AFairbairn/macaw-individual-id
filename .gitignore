@@ -1,0 +1,37 @@
+# =============================================================================
+# .gitignore
+#
+# RULE
+#   Track the input and the code. Do not track anything the pipeline generates.
+#   Every file in results/ is reproducible from ./run_all.sh, so tracking those
+#   files would create merge conflicts and hide which run produced a number.
+# =============================================================================
+
+# Generated results. Rerun the pipeline to recreate them.
+results/
+logs/
+
+# Generated features. Stage 1 and stage 2 recreate them.
+bacpipe_results/
+mfcc_results/
+
+# Python.
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Editors and operating systems.
+.DS_Store
+.vscode/
+.idea/
+
+# Temporary files.
+*.tmp
+*.bak
+*.bak_*
+
+# The audio dataset is published separately. Set PARROT_DATA to its location.
+# The metadata CSV files stay in the repository, because the tests need them.
+data/*/audio/
+data/*/all_calls/

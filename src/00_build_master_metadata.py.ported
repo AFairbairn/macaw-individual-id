@@ -1,0 +1,258 @@
+#!/usr/bin/env python3
+"""build_master_metadata.py - the single source of truth for both species.
+
+Produces ONE tidy table per species, one row per call clip that physically exists
+as trimmed audio, carrying every field the release, the classification re-run and
+the metric-learning re-run need:
+
+    data/aa/metadata/aa_master.csv
+    data/ag/metadata/ag_master.csv
+
+Key columns (identical schema across species):
+    original_stem        bacpipe / audio stem as written by the pipeline (JOIN KEY
+                         to the .npy embedding files - never renamed).
+    standardized_filename  unified cross-species name for the RELEASE:
+                         <sp>_<bird>_<calltype>_<recid>_<NN>.wav
+    species              aa | ag
+    bird                 canonical bird id (matches embedding stem + audio tree)
+    display_name         readable name (aa: capitalised id; ag: thesis_name)
+    call_type            contact / contactseq (aa) ; ah/short/vibrato/... (ag)
+    n_calls              calls in the clip (1 = single)
+    recording_id         TRUE recording session (NOT just date):
+                         aa = YYMMDD-<tascam>;  ag = YYMMDD-<recording_time>
+    date                 YYYY-MM-DD (NA if unknown)
+    location             aa: room (elevator/upstairs);  ag: maxplanck_lab / shelter_groupN
+    environment_class    lab | shelter | unknown   (the AG confound axis)
+    stimulus_only        ag experimental-design flag (NA for aa)
+    sex, age_years, social_group   (ag from bird_info; NA for aa)
+    session_known        1 if recording_id is real, 0 if unresolved
+    kind                 single | repeated
+    rel_audio_path       path to the trimmed wav in the current project tree
+
+Why recording_id and not the filename date: the date alone leaks (calls from the
+same recording land in train AND test). See text/eval_protocol.md sec 2.
+"""
+import os, re, sys
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[2]   # project root
+AA_SINGLE = ROOT / "data/aa/all_calls/single"
+AA_REPEAT = ROOT / "data/aa/all_calls/repeated"
+AG_AUDIO  = ROOT / "data/ag/audio/single"
+
+REPS = {"single":1,"double":2,"triple":3,"quadruple":4,"quintuple":5,
+        "sextuple":6,"septuple":7,"octuple":8,"nonuple":9,"decuple":10}
+
+
+# ----------------------------------------------------------------------------- AA
+def build_aa():
+    md = pd.read_csv(ROOT / "data/aa/metadata/aa_metadata.csv")
+    md = md.drop_duplicates(subset="filename", keep="first").set_index("filename")
+    rows = []
+    for sub, kind in [(AA_SINGLE, "single"), (AA_REPEAT, "repeated")]:
+        for wav in sorted(sub.glob("*.wav")):
+            stem = wav.stem
+            parts = stem.split("_")
+            bird = parts[0].lower()
+            tascam = parts[-1]
+            date_tok = next((t for t in parts if len(t) == 6 and t.isdigit()
+                             and t.startswith("24")), None)
+            reps_word = next((p for p in parts if p in REPS), None)
+            n_calls = REPS.get(reps_word, 1)
+            call_type = "contact" if kind == "single" else "contactseq"
+            # enrich from the metadata table where the stem matches
+            m = md.loc[stem] if stem in md.index else None
+            if m is not None:
+                bird = str(m["specimen"]).lower()
+                tascam = str(m["tascam_id"]) if pd.notna(m["tascam_id"]) else tascam
+                date_tok = str(m["date_raw"]) if pd.notna(m["date_raw"]) else date_tok
+                location = m["location"]
+                if pd.notna(m["n_repetitions"]):
+                    n_calls = int(m["n_repetitions"])
+            else:
+                location = parts[1] if len(parts) > 1 and not parts[1].isdigit() else "NA"
+            date = (f"20{date_tok[:2]}-{date_tok[2:4]}-{date_tok[4:6]}"
+                    if date_tok else "NA")
+            recid = f"{date_tok}-{tascam}" if (date_tok and tascam) else "NA"
+            rows.append(dict(
+                original_stem=stem, species="aa", bird=bird,
+                display_name=bird.capitalize(), call_type=call_type, n_calls=n_calls,
+                recording_id=recid, date=date, location=location,
+                environment_class="captive_facility", stimulus_only="NA",
+                sex="NA", age_years="NA", social_group="NA",
+                session_known=int(recid != "NA"), kind=kind,
+                rel_audio_path=str(wav.relative_to(ROOT)).replace("\\", "/")))
+    df = pd.DataFrame(rows)
+    df = add_standardized_names(df)
+    return df
+
+
+# ----------------------------------------------------------------------------- AG
+def build_ag():
+    rm = pd.read_csv(ROOT / "data/ag/metadata/ag_pipeline_rename_map.csv")
+    sm = pd.read_csv(ROOT / "data/ag/metadata/ag_session_metadata.csv")
+    bi = pd.read_csv(ROOT / "data/ag/metadata/ag_bird_info.csv").set_index("bird_id")
+    rm["new_rel"] = rm["new_rel"].str.replace("\\", "/", regex=False)
+    rm["old_rel"] = rm["old_rel"].str.replace("\\", "/", regex=False)
+    rm["new_stem"] = rm["new_rel"].apply(lambda p: Path(p).stem)
+    rm["old_base"] = rm["old_rel"].apply(lambda p: Path(p).name)
+    sm = sm.rename(columns={"filename": "old_base"})
+    j = rm.merge(sm[["old_base", "recording_date", "recording_time", "session_known"]],
+                 on="old_base", how="left")
+    rows = []
+    for _, r in j.iterrows():
+        bird = r["bird"]
+        time = r["recording_time"]
+        date = r["recording_date"]
+        known = bool(pd.notna(time) and pd.notna(date))
+        if known:
+            recid = f"{int(float(r['session_id']))}-{str(time).replace(':','')}"
+            date_iso = str(date)
+        else:
+            recid, date_iso = "NA", "NA"
+        info = bi.loc[bird] if bird in bi.index else None
+        loc = info["recording_location"] if info is not None else "unknown"
+        env = ("lab" if loc == "maxplanck_lab"
+               else "shelter" if str(loc).startswith("shelter")
+               else "unknown")
+        rows.append(dict(
+            original_stem=r["new_stem"], species="ag", bird=bird,
+            display_name=(info["thesis_name"] if info is not None else bird),
+            call_type=r["call_type"], n_calls=1,
+            recording_id=recid, date=date_iso, location=loc,
+            environment_class=env,
+            stimulus_only=(info["stimulus_only"] if info is not None else "unknown"),
+            sex=(info["sex"] if info is not None else "NA"),
+            age_years=(info["age_years"] if info is not None else "NA"),
+            social_group=(info["group"] if info is not None else "NA"),
+            session_known=int(known), kind="single",
+            rel_audio_path=("data/ag/audio/single/" + r["new_rel"].split("data/ag/audio/single/")[-1]
+                            if "audio/single/" in r["new_rel"] else r["new_rel"])))
+    df = pd.DataFrame(rows)
+    df = add_standardized_names(df)
+    return df
+
+
+# --------------------------------------------------------------- unified naming
+def add_standardized_names(df):
+    """<sp>_<bird>_<calltype>_<recid>_<NN>.wav, NN unique within the group."""
+    df = df.sort_values(["species", "bird", "call_type", "recording_id",
+                         "original_stem"]).reset_index(drop=True)
+    names = []
+    counter = {}
+    for _, r in df.iterrows():
+        rid = r["recording_id"] if r["recording_id"] != "NA" else "NA"
+        key = (r["species"], r["bird"], r["call_type"], rid)
+        counter[key] = counter.get(key, 0) + 1
+        nn = f"{counter[key]:02d}"
+        ct = re.sub(r"[^a-z0-9]", "", str(r["call_type"]).lower())
+        names.append(f"{r['species']}_{r['bird']}_{ct}_{rid}_{nn}.wav")
+    df["standardized_filename"] = names
+    def _tidy(v):
+        try:
+            f = float(v)
+            return str(int(f)) if f == int(f) else str(f)
+        except (TypeError, ValueError):
+            return v
+    for c in ("age_years", "social_group"):
+        df[c] = df[c].map(_tidy)
+    # tidy column order
+    cols = ["standardized_filename", "original_stem", "species", "bird",
+            "display_name", "call_type", "n_calls", "recording_id", "date",
+            "location", "environment_class", "stimulus_only", "sex",
+            "age_years", "social_group", "session_known", "kind", "rel_audio_path"]
+    return df[cols]
+
+
+def verify_embedding_coverage(df, emb_root, species):
+    """Confirm every master row has at least one matching .npy (any model)."""
+    mdir = next((d for d in Path(emb_root).iterdir()
+                 if d.is_dir() and "___" in d.name), None)
+    if mdir is None:
+        print(f"  [{species}] no embedding dir found under {emb_root}"); return
+    model = mdir.name.split("___")[1].rsplit("-", 1)[0]
+    stems = {f.name[:-len(f'_{model}.npy')] for f in mdir.rglob(f"*_{model}.npy")}
+    have = df["original_stem"].isin(stems)
+    print(f"  [{species}] {model}: {have.sum()}/{len(df)} master rows have embeddings; "
+          f"{len(stems - set(df['original_stem']))} npy stems not in master")
+
+
+
+def _sibling_groups(tbl, dataset_keys):
+    """Anonymized full-sib family labels per species from (Father, Mother), WITHOUT
+    exposing the raw parent ids. >=2 in-dataset birds sharing both parents = one family."""
+    t = tbl[tbl["Dataset key"].notna()].copy()
+    t["key"] = t["Dataset key"].str.strip().str.lower()
+    t = t[t["key"].isin(dataset_keys)]
+    out = {}
+    for sp, grp in t.groupby("Species"):
+        fam = {}
+        n = 0
+        full = grp.dropna(subset=["Father", "Mother"])
+        for (f, m), members in full.groupby(["Father", "Mother"]):
+            keys = sorted(members["key"])
+            if len(keys) >= 2:
+                n += 1
+                for k in keys:
+                    fam[k] = f"family_{n}"
+        for _, row in grp.iterrows():
+            k = row["key"]
+            if k in fam:
+                out[k] = fam[k]                              # in a full-sib family
+            elif pd.isna(row["Father"]) and pd.isna(row["Mother"]):
+                out[k] = "unknown"                           # no pedigree on record
+            else:
+                out[k] = "none"                              # pedigree known, no in-dataset full-sib
+    return out
+
+
+def enrich(df, species, tbl):
+    """Add public-safe biological metadata: aviary (housing), birth_year, sibling_group
+    (relationships). Sensitive cols (codes, microchips, parent names, rearing) are NOT used
+    in output. Birds absent from the colony table (ag a/b, nico, plumi) -> unknown/NA."""
+    tbl = tbl.copy()
+    tbl["key"] = tbl["Dataset key"].astype(str).str.strip().str.lower()
+    info = {r["key"]: r for _, r in tbl[tbl["Dataset key"].notna()].iterrows()}
+    sibs = _sibling_groups(tbl, set(df["bird"].str.lower()))
+    av, yr, sg, sx = [], [], [], []
+    for _, r in df.iterrows():
+        b = r["bird"].lower()
+        rec = info.get(b)
+        av.append(rec["Aviary"] if rec is not None and pd.notna(rec["Aviary"]) else "NA")
+        yr.append(str(int(rec["Year"])) if rec is not None and pd.notna(rec["Year"]) else "NA")
+        sg.append(sibs.get(b, "unknown"))
+        # fill sex from the colony table where master lacks it (aa)
+        if r.get("sex") in (None, "NA", "") or pd.isna(r.get("sex")):
+            sx.append(rec["Sex"] if rec is not None and pd.notna(rec["Sex"]) else "NA")
+        else:
+            sx.append(r["sex"])
+    df = df.copy()
+    df["sex"] = sx
+    df["aviary"] = av
+    df["birth_year"] = yr
+    df["sibling_group"] = sg
+    return df
+
+
+def main():
+    tbl = pd.read_excel(ROOT / "data/colony_reference/birds_table.xlsx", sheet_name="Birds")
+    out = {}
+    out["aa"] = enrich(build_aa(), "aa", tbl)
+    out["ag"] = enrich(build_ag(), "ag", tbl)
+    for sp, df in out.items():
+        p = ROOT / f"data/{sp}/metadata/{sp}_master.csv"
+        df.to_csv(p, index=False)
+        known = df["session_known"].sum()
+        print(f"[{sp}] {len(df)} clips | {df['bird'].nunique()} birds | "
+              f"{df.loc[df.session_known==1,'recording_id'].nunique()} recordings | "
+              f"session_known {known}/{len(df)} -> {p.relative_to(ROOT)}")
+    # coverage checks (embeddings extracted to /tmp/emb by the caller)
+    if len(sys.argv) > 1:
+        verify_embedding_coverage(out["aa"], sys.argv[1], "aa")
+        verify_embedding_coverage(out["ag"], sys.argv[2], "ag")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,9 @@
+{
+  "python": "3.11.15",
+  "platform": "Linux-6.18.5-x86_64-with-glibc2.39",
+  "machine": "x86_64",
+  "torch": "2.13.0+cu130",
+  "cuda_available": false,
+  "cuda_version": "13.0",
+  "numpy": "2.4.4"
+}

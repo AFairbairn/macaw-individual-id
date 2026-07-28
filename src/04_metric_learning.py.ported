@@ -1,0 +1,597 @@
+#!/usr/bin/env python
+"""metric_learning.py - train a tiny metric-learning head on frozen embeddings.
+
+    python metric_learning.py <embeddings_root> [--set single|all]
+
+Goal (strategy notes section 6): the linear probe shows individual identity is
+DECODABLE in the frozen embeddings (~0.65) but the raw cosine GEOMETRY does not
+expose it (~0.45-0.50: "decodable but not structured"). A small learned metric
+head should reorganise the geometry so DISTANCE itself encodes identity, which is
+what open-set verification / clustering of unknown birds (the field goal) needs.
+
+Design (deliberately tiny; a deep MLP overfits ~480 calls, which is exactly what
+the earlier ag ArcFace attempt did):
+  head:  StandardScaler -> [optional PCA] -> Linear(in_dim -> PROJ_DIM) -> L2-norm
+  loss:  prototypical (Snell et al. 2017, PRIMARY) or supervised contrastive
+         (Khosla et al. 2020, SupCon). ArcFace / triplet deliberately dropped.
+  score: cosine nearest-centroid / verification EER / clustering ARI, computed
+         IDENTICALLY to the frozen baseline in classify.py so the comparison is
+         metric-to-metric (the ag run's mistake was comparing a head to a probe).
+
+Two evaluations, both session-aware (GroupKFold by recording date):
+  A) closed-set, all birds. Baseline = FROZEN cosine-centroid; probe = ceiling.
+     Tests whether the head exposes identity for KNOWN / enrolled birds.
+  B) leave-individuals-out. Train the head on some birds, score clustering ARI +
+     verification EER on HELD-OUT birds never seen in training. Tests transfer to
+     NOVEL individuals (the real goal). High variance with 8 aa birds; this is the
+     test ag (14 birds) and future data are meant to strengthen.
+
+Emits tidy CSVs only (no figures), for the R analysis:
+    results/metric_learning/<set>/summary.csv      one row per model x method x eval
+    results/metric_learning/<set>/eval_B_folds.csv per-repeat LOO detail (variance)
+
+Optional (--dump-embeddings <model>|all): persist the head's metric-space vectors that
+the clustering / verification scorers compute anyway (no extra training), so they are
+reusable and drive the before/after UMAP figure. Frozen vectors are already on disk as
+the extract_embeddings .npy, so only the head output is saved:
+    results/metric_learning/<set>/head_embeddings.csv   per-clip head vectors (e0..e{D-1})
+    results/metric_learning/<set>/head_umap_coords.csv  2-D UMAP, 4 panels (Fig 4)
+
+Notes
+- CPU is fine (tiny head, ~480 vectors); GPU only speeds the sweep.
+- Within-SPECIES sampling is automatic here (aa only). When ag is added and a
+  pooled aa+ag head is trained, restrict positive/negative pairs to within-species
+  so the head cannot cheat by separating species (strategy notes section 7).
+"""
+import sys, argparse, warnings, collections
+from pathlib import Path
+import numpy as np, pandas as pd
+warnings.filterwarnings("ignore")
+import torch, torch.nn as nn, torch.nn.functional as F
+from sklearn.preprocessing import StandardScaler, normalize
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import GroupKFold
+from sklearn.cluster import KMeans
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import (accuracy_score, balanced_accuracy_score, roc_auc_score,
+                             roc_curve, adjusted_rand_score, adjusted_mutual_info_score)
+
+# ---------------- config (tune here; defaults match the sandbox preview) -------
+SEED        = 42
+N_FOLDS     = 5
+PROJ_DIM    = 128       # output metric-space dim (128-256 standard; 32-64 also fine on this data)
+PCA_DIM     = None      # set to e.g. 150 to PCA-reduce before the head (regularises high-D); None = off
+TEMP        = 0.1       # softmax temperature for both losses
+LR          = 1e-2
+WEIGHT_DECAY= 1e-3
+MAX_EPOCHS  = 200
+PATIENCE    = 20        # early stop on a held-out (by-session) validation slice
+PROTO_SUPPORT_FRAC = 0.5
+B_HOLDOUT   = 3         # birds held out per leave-individuals-out repeat
+B_REPEATS   = 12
+KNN_K       = 5         # k for the kNN classifier-free probe (cosine)
+FEWSHOT_DRAWS = 5       # support-set resamples for few-shot novel-individual ID
+FEWSHOT_SHOTS = (1, 5)  # n_shot values (1-shot, 5-shot enrolment)
+OPENSET_KNOWN_TEST_FRAC = 0.2   # known-bird slice held out to score known-vs-novel AUROC
+LOSSES      = ["proto", "supcon"]
+DROP_CLIPS  = {"acorn_upstaris_240517_0777"}
+DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
+torch.manual_seed(SEED); np.random.seed(SEED)
+
+
+# ---------------- data ----------------
+def parse_stem(stem):
+    parts = stem.split("_")
+    bird = parts[0].lower() if parts else None
+    sess = next((t for t in parts if len(t) == 6 and t.isdigit() and t.startswith("24")), None)
+    return bird, sess
+
+def model_dirs(root):
+    out = {}
+    for d in sorted(Path(root).iterdir()):
+        if d.is_dir() and "___" in d.name and list(d.rglob("*.npy")):
+            out[d.name.split("___")[1].rsplit("-", 1)[0]] = d
+    return out
+
+def infer_species(root):
+    """Species tag for the output path so aa and ag never overwrite each other
+    (bacpipe_results/<species>/embeddings). Override with --species."""
+    parts = [x.lower() for x in Path(root).resolve().parts]
+    for tok in ("aa", "ag"):
+        if tok in parts:
+            return tok
+    r = Path(root).resolve()
+    return (r.parent.name if r.name == "embeddings" else r.name).lower()
+
+import os
+SUBSETS = {
+    "aa": {"all": (lambda r: True)},
+    "ag": {"all": (lambda r: True),
+           "lab": (lambda r: r["environment_class"] == "lab")},
+}
+
+def find_master(species):
+    if os.environ.get("MASTER_DIR"):
+        p = Path(os.environ["MASTER_DIR"]) / f"{species}_master.csv"
+        if p.exists():
+            return p
+    for base in [Path.cwd(), *Path.cwd().parents]:
+        p = base / f"data/{species}/metadata/{species}_master.csv"
+        if p.exists():
+            return p
+    raise FileNotFoundError(f"{species}_master.csv not found (set MASTER_DIR)")
+
+def load_master(species):
+    df = pd.read_csv(find_master(species), dtype=str)
+    return {r["original_stem"]: r for _, r in df.iterrows()}
+
+def collect_single_stems(mdirs):
+    return {f.name[:-len(f'_{m}.npy')] for m, d in mdirs.items()
+            for f in d.rglob(f'*_{m}.npy') if '/single/' in f.as_posix()}
+
+def load(model_dir, model, single_stems, single_only, master, keep_stems):
+    """bird + session come from the MASTER metadata (true recording_id, not the
+    filename date). keep_stems restricts to the active subset (e.g. ag lab birds)."""
+    rows = []
+    for f in sorted(model_dir.rglob(f"*_{model}.npy")):
+        stem = f.name[:-len(f"_{model}.npy")]
+        if stem in DROP_CLIPS or stem not in master or stem not in keep_stems:
+            continue
+        m = master[stem]
+        if str(m.get("session_known")) != "1" or m.get("recording_id") in (None, "NA"):
+            continue
+        bird, sess = m["bird"].lower(), m["recording_id"]
+        is_single = stem in single_stems
+        if single_only and not is_single:
+            continue
+        v = np.atleast_2d(np.load(f))
+        if v.ndim != 2:
+            continue
+        for w in v:                       # one row per model-native window
+            if np.isfinite(w).all():
+                rows.append((stem, bird, sess, w.astype(np.float32)))
+    df = pd.DataFrame(rows, columns=["clip", "bird", "session", "emb"])
+    return df
+
+
+# ---------------- head + losses ----------------
+class Head(nn.Module):
+    """Single linear projection to the metric space; L2-normalised output."""
+    def __init__(self, in_dim, proj_dim):
+        super().__init__()
+        self.fc = nn.Linear(in_dim, proj_dim)
+    def forward(self, x):
+        return F.normalize(self.fc(x), dim=1)
+
+def supcon_loss(z, y, temp=TEMP):
+    """Supervised contrastive (Khosla et al. 2020). z is L2-normalised."""
+    n = z.shape[0]
+    sim = (z @ z.T) / temp
+    sim = sim - sim.max(dim=1, keepdim=True).values.detach()
+    eye = torch.eye(n, device=z.device)
+    exp = torch.exp(sim) * (1 - eye)
+    logp = sim - torch.log(exp.sum(1, keepdim=True) + 1e-9)
+    pos = (y[:, None] == y[None, :]).float() * (1 - eye)
+    pc = pos.sum(1)
+    li = -(pos * logp).sum(1) / (pc + 1e-9)
+    return (li * (pc > 0)).sum() / ((pc > 0).sum() + 1e-9)
+
+def proto_loss(z, y, classes, temp=TEMP, support_frac=PROTO_SUPPORT_FRAC, gen=None):
+    """Prototypical (Snell et al. 2017): split each class into support/query,
+    build prototypes from support, classify query by cosine to prototypes."""
+    sup = torch.zeros(len(y), dtype=torch.bool, device=z.device)
+    for c in classes:
+        idx = (y == c).nonzero(as_tuple=True)[0]
+        k = max(1, int(round(len(idx) * support_frac)))
+        perm = idx[torch.randperm(len(idx), generator=gen, device=z.device)[:k]]
+        sup[perm] = True
+    protos = torch.stack([z[(y == c) & sup].mean(0) for c in classes])
+    protos = F.normalize(protos, dim=1)
+    q = ~sup
+    logits = (z[q] @ protos.T) / temp
+    cidx = {int(c): i for i, c in enumerate(classes)}
+    tgt = torch.tensor([cidx[int(v)] for v in y[q]], device=z.device)
+    return F.cross_entropy(logits, tgt)
+
+def train_head(Xtr, ytr, loss_kind, classes_np):
+    """Train one head with early stopping on a by-session-free random val slice."""
+    rng = np.random.default_rng(SEED)
+    val = np.zeros(len(ytr), bool)
+    for c in classes_np:
+        idx = np.where(ytr == c)[0]
+        if len(idx) < 2:                       # singleton in this fold: keep it in train, never in val
+            continue
+        k = min(max(1, int(round(len(idx) * 0.15))), len(idx) - 1)   # never move a whole class to val
+        val[rng.choice(idx, size=k, replace=False)] = True
+    # bird labels are strings; integer-encode them for torch
+    code = {c: i for i, c in enumerate(classes_np)}
+    ytr_i = np.array([code[v] for v in ytr], dtype=np.int64)
+    Xt = torch.tensor(Xtr[~val], dtype=torch.float32, device=DEVICE)
+    yt = torch.tensor(ytr_i[~val], device=DEVICE)
+    Xv = torch.tensor(Xtr[val], dtype=torch.float32, device=DEVICE)
+    yv = torch.tensor(ytr_i[val], device=DEVICE)
+    classes = torch.arange(len(classes_np), device=DEVICE)
+    gen = torch.Generator(device=DEVICE); gen.manual_seed(SEED)
+
+    head = Head(Xtr.shape[1], PROJ_DIM).to(DEVICE)
+    opt = torch.optim.AdamW(head.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    best, best_state, since = 1e9, None, 0
+    for ep in range(MAX_EPOCHS):
+        head.train(); opt.zero_grad()
+        z = head(Xt)
+        loss = supcon_loss(z, yt) if loss_kind == "supcon" else proto_loss(z, yt, classes, gen=gen)
+        loss.backward(); opt.step()
+        head.eval()
+        with torch.no_grad():
+            zv = head(Xv)
+            vl = (supcon_loss(zv, yv) if loss_kind == "supcon"
+                  else proto_loss(zv, yv, classes, gen=gen)).item()
+        if vl < best - 1e-4:
+            best, best_state, since = vl, {k: v.detach().clone() for k, v in head.state_dict().items()}, 0
+        else:
+            since += 1
+            if since >= PATIENCE:
+                break
+    if best_state:
+        head.load_state_dict(best_state)
+    head.eval()
+    return head
+
+def project(head, X):
+    with torch.no_grad():
+        return head(torch.tensor(X, dtype=torch.float32, device=DEVICE)).cpu().numpy()
+
+def umap2d(M):
+    """2-D UMAP for the before/after picture only. Cosine because the vectors are
+    L2-normalised (they live on a hypersphere). Visualisation only; never scored."""
+    from umap import UMAP                 # umap-learn (already a pipeline dependency)
+    return UMAP(n_neighbors=15, min_dist=0.1, metric="cosine",
+                random_state=SEED).fit_transform(np.asarray(M, dtype=np.float64))
+
+
+# ---------------- scoring ----------------
+# All scorers take L2-normalised vectors so dot product == cosine similarity.
+def centroid_pred(ztr, ytr, zte, classes):
+    """Cosine nearest-CENTROID: one mean template per bird (enrolment lens)."""
+    cents = normalize(np.stack([ztr[ytr == c].mean(0) for c in classes]))
+    return classes[(zte @ cents.T).argmax(1)]
+
+def knn_pred(ztr, ytr, zte, k=KNN_K):
+    """kNN (cosine): vote among k nearest reference CALLS, no averaging. Handles
+    multi-modal repertoires (several call types per bird) better than the centroid."""
+    clf = KNeighborsClassifier(n_neighbors=min(k, len(ztr)), metric="cosine").fit(ztr, ytr)
+    return clf.predict(zte)
+
+def eer_auc(z, y, g):
+    sims = z @ z.T; iu = np.triu_indices(len(y), 1); s = sims[iu]
+    sb = (y[:, None] == y[None, :])[iu]; ss = (g[:, None] == g[None, :])[iu]
+    pos = sb & ~ss; neg = ~sb; keep = pos | neg
+    lab = pos[keep].astype(int); sc = s[keep]
+    if lab.sum() == 0 or lab.sum() == len(lab):
+        return np.nan, np.nan
+    auc = roc_auc_score(lab, sc); fpr, tpr, _ = roc_curve(lab, sc); fnr = 1 - tpr
+    return auc, float(fpr[np.nanargmin(np.abs(fnr - fpr))])
+
+def cluster_scores(z, y):
+    """One KMeans (k = #classes); score with ARI and AMI (both chance-corrected).
+    AMI is the metric our bacpipe/Stowell comparators report; ARI kept for continuity."""
+    k = len(np.unique(y))
+    lab = KMeans(k, random_state=SEED, n_init=10).fit_predict(z)
+    return adjusted_rand_score(y, lab), adjusted_mutual_info_score(y, lab)
+
+def few_shot_novel_acc(z_known, z_novel, y_novel, n_shot, rng, n_draws=FEWSHOT_DRAWS):
+    """Open-set enrolment test: give n_shot reference calls per NOVEL bird, classify
+    that bird's remaining calls by nearest reference (cosine), with ALL known-bird
+    calls thrown in as distractors. Balanced accuracy over novel queries, averaged
+    over support resamples. Mirrors 'enrol a new individual from a few clips, then
+    re-identify it without confusing it for a known bird' (Nolasco et al. 2024)."""
+    novel_birds = np.unique(y_novel)
+    accs = []
+    for _ in range(n_draws):
+        sup = np.zeros(len(y_novel), bool)
+        ok = True
+        for b in novel_birds:
+            idx = np.where(y_novel == b)[0]
+            if len(idx) <= n_shot:
+                ok = False; break
+            sup[rng.choice(idx, size=n_shot, replace=False)] = True
+        if not ok:
+            return np.nan
+        ref_z = np.vstack([z_novel[sup], z_known])
+        ref_lab = np.concatenate([y_novel[sup], np.array(["__known__"] * len(z_known))])
+        q_z, q_y = z_novel[~sup], y_novel[~sup]
+        pred = ref_lab[(q_z @ ref_z.T).argmax(1)]
+        accs.append(balanced_accuracy_score(q_y, pred))
+    return float(np.mean(accs)) if accs else np.nan
+
+def openset_auroc(z_kref, y_kref, z_ktest, z_novel):
+    """Known-vs-novel detection: novelty score = max cosine sim to a known-bird
+    centroid. Known-test calls should score high, novel low. Returns ROC-AUC."""
+    cents = normalize(np.stack([z_kref[y_kref == c].mean(0) for c in np.unique(y_kref)]))
+    s_known = (z_ktest @ cents.T).max(1); s_novel = (z_novel @ cents.T).max(1)
+    scores = np.concatenate([s_known, s_novel])
+    labels = np.concatenate([np.ones(len(s_known)), np.zeros(len(s_novel))])
+    if labels.sum() in (0, len(labels)):
+        return np.nan
+    return float(roc_auc_score(labels, scores))
+
+def prep(Xtr):
+    sc = StandardScaler().fit(Xtr)
+    if PCA_DIM:
+        pca = PCA(n_components=min(PCA_DIM, Xtr.shape[0]-1, Xtr.shape[1]), random_state=SEED).fit(sc.transform(Xtr))
+        return lambda X: pca.transform(sc.transform(X)).astype(np.float32)
+    return lambda X: sc.transform(X).astype(np.float32)
+
+
+# ---------------- evals ----------------
+def eval_model(model, df, dump=False, umap_loss="proto", do_umap=False):
+    X = np.stack(df["emb"].to_list()); y = df["bird"].to_numpy(); g = df["session"].to_numpy()
+    clips = df["clip"].to_numpy()
+    classes = np.unique(y); rows, bfolds = [], []
+    # If dump: stash the per-clip metric-space vectors that the clustering / verification
+    # scorers compute anyway, so they become a reusable artifact (and the UMAP source) with
+    # NO extra training pass. A_emb = eval-A OUT-OF-FOLD vectors (every clip scored once by a
+    # held-out fold); B_emb = eval-B novel-bird vectors from the first leave-out repeat.
+    A_emb, B_emb = {}, {}
+    preds_A = []          # per-window centroid predictions (dump only) -> confusion matrix
+
+    # ---- A: closed-set, session-aware ---- frozen + probe baselines, then heads
+    # Reports BOTH classifier-free probes (centroid + kNN) and clustering (ARI+AMI),
+    # plus ENCOUNTER fusion (recording-level, the deployment unit; mirrors classify.py).
+    def A_for(head_kind):
+        cacc, kacc, eers, aucs, aris, amis, enc = [], [], [], [], [], [], []
+        for tr, te in GroupKFold(N_FOLDS).split(X, y, g):
+            tr_cls = np.unique(y[tr])                 # birds enrollable in THIS fold
+            keep = np.isin(y[te], tr_cls)             # test calls of an enrollable bird
+            feat = prep(X[tr]); Xtr, Xte = feat(X[tr]), feat(X[te])
+            if head_kind == "frozen":
+                ztr, zte = normalize(Xtr), normalize(Xte)
+            else:
+                head = train_head(Xtr, y[tr], head_kind, tr_cls)
+                ztr, zte = project(head, Xtr), project(head, Xte)
+            if keep.any():                            # single-session birds are absent from train -> unscorable, skip
+                cpred = centroid_pred(ztr, y[tr], zte[keep], tr_cls)
+                cacc.append(accuracy_score(y[te][keep], cpred))
+                kacc.append(accuracy_score(y[te][keep], knn_pred(ztr, y[tr], zte[keep])))
+                # encounter fusion: pool a bird's calls within a RECORDING into ONE mean
+                # query -> nearest enrolled centroid (same definition as classify.py).
+                kb, ks, kz = y[te][keep], g[te][keep], zte[keep]
+                bucket = collections.defaultdict(list)
+                for b, s, vv in zip(kb, ks, kz):
+                    bucket[(b, s)].append(vv)
+                qy = np.array([k[0] for k in bucket])
+                Q = normalize(np.stack([np.mean(v, 0) for v in bucket.values()]))
+                enc.append(accuracy_score(qy, centroid_pred(ztr, y[tr], Q, tr_cls)))
+                if dump:                              # (true, pred) per window for the confusion matrix
+                    for gi, p in zip(te[keep], cpred):
+                        preds_A.append(dict(model=model, method=head_kind, eval="A_closed",
+                                            clip_id=clips[gi], bird=y[gi], session=g[gi], pred=p))
+            au, e = eer_auc(zte, y[te], g[te]); eers.append(e); aucs.append(au)
+            ar, am = cluster_scores(zte, y[te]); aris.append(ar); amis.append(am)
+            if dump:
+                A_emb.setdefault(head_kind, []).extend(
+                    (clips[i], y[i], g[i], zte[j]) for j, i in enumerate(te))
+        return dict(centroid_acc=np.mean(cacc), centroid_acc_sd=np.std(cacc),
+                    knn_acc=np.mean(kacc), knn_acc_sd=np.std(kacc),
+                    encounter_acc=(np.mean(enc) if enc else np.nan),
+                    encounter_acc_sd=(np.std(enc) if enc else np.nan),
+                    eer=np.nanmean(eers), auc=np.nanmean(aucs),
+                    ari=np.mean(aris), ami=np.mean(amis))
+
+    probe = []
+    for tr, te in GroupKFold(N_FOLDS).split(X, y, g):
+        s = StandardScaler().fit(X[tr])
+        clf = LogisticRegression(max_iter=2000, random_state=SEED).fit(s.transform(X[tr]), y[tr])
+        probe.append(accuracy_score(y[te], clf.predict(s.transform(X[te]))))
+    probe = float(np.mean(probe))
+
+    for kind in ["frozen"] + LOSSES:
+        a = A_for(kind)
+        rows.append(dict(model=model, method=kind, eval="A_closed", **a,
+                         probe_ceiling=probe if kind == "frozen" else np.nan,
+                         n=len(y), n_birds=len(classes), n_sessions=len(np.unique(g))))
+
+    # ---- B: leave-individuals-out (novel individuals) ----
+    rng = np.random.default_rng(SEED)
+    parts = [rng.choice(classes, B_HOLDOUT, replace=False) for _ in range(B_REPEATS)]
+    fs_rng = np.random.default_rng(SEED + 1)
+    for kind in ["frozen"] + LOSSES:
+        agg = collections.defaultdict(list)
+        for ri, ho in enumerate(parts):
+            tem = np.isin(y, ho); trc = np.unique(y[~tem])
+            # Split KNOWN calls (stratified by bird) into a head-training part and a
+            # held-out known-test part. The head is trained ONLY on known-train, so the
+            # known side of the known-vs-novel AUROC is scored on calls the head never
+            # saw (matches the OOD-birds open-set protocol; avoids the inflated AUROC).
+            kidx = np.where(~tem)[0]
+            ktr_parts, kte_parts = [], []
+            for b in trc:
+                bidx = kidx[y[kidx] == b].copy(); fs_rng.shuffle(bidx)
+                cut = max(1, int(round(len(bidx) * (1 - OPENSET_KNOWN_TEST_FRAC))))
+                ktr_parts.append(bidx[:cut]); kte_parts.append(bidx[cut:])
+            ktr = np.concatenate(ktr_parts); kte = np.concatenate(kte_parts)
+            feat = prep(X[ktr])
+            Xktr, Xkte, Xho = feat(X[ktr]), feat(X[kte]), feat(X[tem])
+            yktr, yho, gho = y[ktr], y[tem], g[tem]
+            if kind == "frozen":
+                zktr, zkte, zho = normalize(Xktr), normalize(Xkte), normalize(Xho)
+            else:
+                head = train_head(Xktr, yktr, kind, trc)
+                zktr = project(head, Xktr); zkte = project(head, Xkte); zho = project(head, Xho)
+            _, e = eer_auc(zho, yho, gho)
+            ar, am = cluster_scores(zho, yho)
+            # known side (zkte) is unseen by the head; reference centroids from zktr
+            auroc = openset_auroc(zktr, yktr, zkte, zho) if len(zkte) else np.nan
+            fs1 = few_shot_novel_acc(zktr, zho, yho, FEWSHOT_SHOTS[0], fs_rng)
+            fs5 = few_shot_novel_acc(zktr, zho, yho, FEWSHOT_SHOTS[1], fs_rng)
+            vals = dict(eer=e, ari=ar, ami=am, openset_auroc=auroc,
+                        fewshot_1=fs1, fewshot_5=fs5)
+            if dump and ri == 0:        # first repeat = the canonical novel split to picture
+                ho_idx = np.where(tem)[0]
+                B_emb.setdefault(kind, []).extend(
+                    (clips[i], yho[j], gho[j], zho[j]) for j, i in enumerate(ho_idx))
+            for kk, vv in vals.items():
+                agg[kk].append(vv)
+            bfolds.append(dict(model=model, method=kind, repeat=ri,
+                               held_out="|".join(map(str, ho)), **vals))
+        rows.append(dict(model=model, method=kind, eval="B_leave_ind_out",
+                         eer=np.nanmean(agg["eer"]), eer_sd=np.nanstd(agg["eer"]),
+                         ari=np.nanmean(agg["ari"]), ari_sd=np.nanstd(agg["ari"]),
+                         ami=np.nanmean(agg["ami"]),
+                         openset_auroc=np.nanmean(agg["openset_auroc"]),
+                         fewshot_1=np.nanmean(agg["fewshot_1"]), fewshot_1_sd=np.nanstd(agg["fewshot_1"]),
+                         fewshot_5=np.nanmean(agg["fewshot_5"])))
+
+    umap_panels = None
+    if dump and do_umap:
+        fk, hk = known_umap_source(X, y, g, clips, classes, umap_loss)
+        umap_panels = {"frozen_known": fk, "head_known": hk,
+                       "frozen_novel": B_emb.get("frozen", []),
+                       "head_novel":   B_emb.get(umap_loss, [])}
+    payload = build_dump(model, A_emb, B_emb, umap_panels) if dump else None
+    return rows, bfolds, payload, preds_A
+
+
+def known_umap_source(X, y, g, clips, classes, loss):
+    """Coherent KNOWN-bird panels for the picture: ONE head on a session-disjoint split,
+    projecting the HELD-OUT sessions. (Pooling the 5 CV folds' out-of-fold vectors is wrong
+    for a picture -- each fold is a separately trained head with its own coordinate frame,
+    so UMAP draws fold/session blobs with mixed birds, not bird clusters.) Holds out ~half of
+    EACH bird's sessions, so the panel honestly shows whether the head groups a bird's calls
+    across *unseen* sessions. Returns (frozen_known, head_known) as (clip,bird,session,vec)."""
+    rng = np.random.default_rng(SEED)
+    test = np.zeros(len(y), bool)
+    for c in classes:
+        sess = np.unique(g[y == c]); rng.shuffle(sess)
+        held = set(sess[:max(1, len(sess) // 2)])
+        test |= (y == c) & np.isin(g, list(held))
+    feat = prep(X[~test])
+    Xtr, Xte = feat(X[~test]), feat(X[test])
+    zf = normalize(Xte)                            # frozen, held-out sessions
+    head = train_head(Xtr, y[~test], loss, np.unique(y[~test]))
+    zh = project(head, Xte)                        # head, single coherent frame
+    idx = np.where(test)[0]
+    fk = [(clips[i], y[i], g[i], zf[j]) for j, i in enumerate(idx)]
+    hk = [(clips[i], y[i], g[i], zh[j]) for j, i in enumerate(idx)]
+    return fk, hk
+
+
+def build_dump(model, A_emb, B_emb, umap_panels=None):
+    """head_embeddings: the head-projected vectors (the clustering input; frozen vectors are
+    already on disk as the extract_embeddings .npy, so only the head output, both losses, is
+    saved) for every dumped model. umap_panels (only for --umap-model): the four coherent
+    single-head panel sources for the before/after figure (Fig 4)."""
+    erecs = []
+    for ev, store in (("A_known", A_emb), ("B_novel", B_emb)):
+        for meth in LOSSES:                       # head vectors only (frozen = saved .npy)
+            for clip, bird, sess, vec in store.get(meth, []):
+                erecs.append(dict(model=model, method=meth, eval=ev, clip_id=clip,
+                                  bird=bird, session=sess,
+                                  **{f"e{i}": float(v) for i, v in enumerate(vec)}))
+    head_emb = pd.DataFrame(erecs)
+    if not umap_panels:
+        return dict(head_emb=head_emb, umap=pd.DataFrame())
+
+    def coords(panel, store_list):
+        if not store_list:
+            return []
+        clp, brd, ses, V = zip(*store_list)
+        xy = umap2d(np.stack(V))
+        return [dict(model=model, panel=panel, clip_id=clp[i], bird=brd[i], session=ses[i],
+                     x=float(xy[i, 0]), y=float(xy[i, 1])) for i in range(len(clp))]
+    urecs = []
+    for panel in ("frozen_known", "head_known", "frozen_novel", "head_novel"):
+        urecs += coords(panel, umap_panels.get(panel, []))
+    return dict(head_emb=head_emb, umap=pd.DataFrame(urecs))
+
+
+def main():
+    global PROJ_DIM, PCA_DIM, WEIGHT_DECAY
+    ap = argparse.ArgumentParser()
+    ap.add_argument("root"); ap.add_argument("--set", choices=["single", "all"], default="single")
+    ap.add_argument("--species", default="", help="species tag for output path (default: inferred from root)")
+    ap.add_argument("--proj", type=int, default=PROJ_DIM, help="projection-head output dim")
+    ap.add_argument("--pca", type=int, default=(PCA_DIM or 0),
+                    help="PCA-reduce inputs to this dim before the head (0 = off)")
+    ap.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY)
+    ap.add_argument("--tag", default="", help="suffix for the output folder, e.g. _reg")
+    ap.add_argument("--dump-embeddings", action="store_true",
+                    help="save head embeddings for ALL models (the clustering input; "
+                         "reuses vectors already computed, no extra training)")
+    ap.add_argument("--umap-model", default="perch_bird", metavar="MODEL",
+                    help="model to also write before/after UMAP coords for (Fig 4)")
+    ap.add_argument("--umap-loss", choices=LOSSES, default="proto",
+                    help="which head (proto/supcon) fills the UMAP head panels")
+    ap.add_argument("--models", default="",
+                    help="comma-list to restrict which models are evaluated, e.g. 'perch_bird'. "
+                         "When set, ONLY head_umap_coords.csv is (re)written, so summary.csv and "
+                         "head_embeddings.csv are left untouched -- a fast re-run for just the figure.")
+    ap.add_argument("--subset", default="", help="ag: all|lab (default: every subset defined for the species)")
+    args = ap.parse_args()
+    sel = {m.strip() for m in args.models.split(",") if m.strip()} or None
+    PROJ_DIM, PCA_DIM, WEIGHT_DECAY = args.proj, (args.pca or None), args.weight_decay
+    mdirs = model_dirs(Path(args.root).resolve())
+    singles = collect_single_stems(mdirs)
+    print(f"{len(mdirs)} models on the '{args.set}' set; device={DEVICE}; "
+          f"proj={PROJ_DIM} pca={PCA_DIM} weight_decay={WEIGHT_DECAY}")
+    if args.dump_embeddings:
+        print(f"dumping head embeddings for all models; UMAP for {args.umap_model} "
+              f"(umap_loss={args.umap_loss})")
+    species = args.species or infer_species(Path(args.root))
+    master = load_master(species)
+    subdefs = SUBSETS.get(species, {"all": (lambda r: True)})
+    if args.subset:
+        subdefs = {args.subset: subdefs.get(args.subset, (lambda r: True))}
+    print(f"species={species} | subsets={list(subdefs)}")
+    for subset, pred_fn in subdefs.items():
+        keep_stems = {st for st, r in master.items() if pred_fn(r)}
+        outdir = Path("results") / species / subset / "metric_learning" / (args.set + args.tag)
+        outdir.mkdir(parents=True, exist_ok=True)
+        print(f"--- subset={subset} ({len(keep_stems)} clips) -> {outdir}")
+        all_rows, all_b, dumps, all_preds = [], [], [], []
+        for model, d in sorted(mdirs.items()):
+            if sel and model not in sel:
+                continue
+            df = load(d, model, singles, single_only=(args.set == "single"),
+                      master=master, keep_stems=keep_stems)
+            if len(df) < 20 or df["bird"].nunique() < 3:
+                print(f"  {model}: too few samples, skipped"); continue
+            rows, bf, payload, preds = eval_model(model, df, dump=args.dump_embeddings,
+                                           umap_loss=args.umap_loss,
+                                           do_umap=(args.dump_embeddings and model == args.umap_model))
+            all_rows += rows; all_b += bf; all_preds += preds
+            if payload is not None:
+                dumps.append(payload)
+            a = next(r for r in rows if r["method"] == LOSSES[-1] and r["eval"] == "A_closed")
+            fr = next(r for r in rows if r["method"] == "frozen" and r["eval"] == "A_closed")
+            print(f"  {model}: frozen centroid {fr['centroid_acc']:.3f} -> {LOSSES[-1]} "
+                  f"{a['centroid_acc']:.3f} (probe {fr['probe_ceiling']:.3f})")
+        um = pd.concat([p["umap"] for p in dumps], ignore_index=True) if dumps else pd.DataFrame()
+        if sel:                                   # fast figure-only run: don't clobber full results
+            if len(um):
+                um.to_csv(outdir / "head_umap_coords.csv", index=False)
+                print(f"  figure-only run ({', '.join(sorted(sel))}): wrote head_umap_coords.csv")
+            else:
+                print(f"  figure-only run made no UMAP coords (is --umap-model '{args.umap_model}' in --models?)")
+            continue
+        pd.DataFrame(all_rows).to_csv(outdir / "summary.csv", index=False)
+        pd.DataFrame(all_b).to_csv(outdir / "eval_B_folds.csv", index=False)
+        print(f"  wrote {outdir}/summary.csv and eval_B_folds.csv")
+        if all_preds:
+            pd.DataFrame(all_preds).to_csv(outdir / "predictions.csv", index=False)
+            print(f"  wrote {outdir}/predictions.csv ({len(all_preds)} rows)")
+        if dumps:
+            pd.concat([p["head_emb"] for p in dumps], ignore_index=True).to_csv(
+                outdir / "head_embeddings.csv", index=False)
+            msg = f"  wrote {outdir}/head_embeddings.csv"
+            if len(um):
+                um.to_csv(outdir / "head_umap_coords.csv", index=False)
+                msg += " and head_umap_coords.csv"
+            else:
+                msg += "  (no UMAP coords: --umap-model not among the dumped models)"
+            print(msg)
+
+
+if __name__ == "__main__":
+    main()

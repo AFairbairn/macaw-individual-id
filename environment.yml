@@ -1,0 +1,58 @@
+# =============================================================================
+# environment.yml
+#
+# PURPOSE
+#   Pin every dependency, so a rerun uses the same versions.
+#
+# USAGE
+#   conda env create -f environment.yml
+#   conda activate parrot-id
+#
+# WARNING
+#   Do not run `pip install -U jax[cuda12]`. The -U flag upgrades numpy to
+#   version 2, which breaks the pinned torch and bacpipe environment. JAX models
+#   (perch_bird, perch_v2, surfperch) run on CPU by design. That is expected.
+#
+# NOTE
+#   numpy is pinned below version 2. Several pinned packages fail on numpy 2.
+# =============================================================================
+name: parrot-id
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.10
+
+  # Core numerical stack.
+  - numpy<2
+  - pandas=2.2.*
+  - scipy=1.13.*
+  - scikit-learn=1.5.*
+  - pyyaml=6.*
+
+  # Audio.
+  - librosa=0.10.*
+  - soundfile=0.12.*
+
+  # Clustering and projection.
+  - hdbscan=0.8.*
+  - umap-learn=0.5.*
+
+  # Figures.
+  - matplotlib=3.9.*
+
+  # Tests.
+  - pytest=8.*
+
+  - pip
+  - pip:
+      # PyTorch. The metric-learning head uses it.
+      # For a CUDA build, install the matching wheel from pytorch.org after you
+      # create the environment.
+      - torch==2.3.1
+
+      # bacpipe supplies the 15 pre-trained embedding models.
+      # CAUTION: bacpipe reads its device from settings.yaml inside the package.
+      # It does not detect CUDA. run_all.sh sets that value.
+      - bacpipe==0.1.0

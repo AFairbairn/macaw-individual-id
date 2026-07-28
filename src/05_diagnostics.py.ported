@@ -1,0 +1,203 @@
+#!/usr/bin/env python
+"""Local Jakob diagnostics from frozen embeddings (no GPU/server needed).
+
+Three analyses, both species, leader models:
+ 1. Domain-shift proxy: WITHIN a bird, are its separate recordings acoustically
+    separable? (predict recording_id from embeddings, within-bird). Above chance
+    => a session/domain signature the ID model could exploit. Proxy for Jakob's
+    "does the background classify above chance" test, but confounded-free of
+    identity because it is run one bird at a time.
+ 2. Within-call-type individual ID (AG): which call type separates birds best?
+    session-aware (GroupKFold by recording) cosine nearest-centroid.
+ 3. Kinship: are same-sibling-group birds closer in embedding space than
+    different-family birds? (different-bird, different-recording pairs only).
+    Permutation test on the mean cosine-similarity gap.
+"""
+import sys, collections, warnings
+from pathlib import Path
+import numpy as np, pandas as pd
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder, normalize
+from sklearn.model_selection import GroupKFold, StratifiedKFold
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+SEED = 42
+MODELS = ["birdnet", "birdmae", "perch_bird"]
+DROP_CLIPS = {"acorn_upstaris_240517_0777"}
+ROOTS = {"aa": Path("bacpipe_results/aa/embeddings"), "ag": Path("embeddings")}
+MASTER = {sp: f"/mnt/user-data/uploads/Parrot Individual Id/data/{sp}/metadata/{sp}_master.csv"
+          for sp in ("aa", "ag")}
+
+def load_master(sp):
+    df = pd.read_csv(MASTER[sp], dtype=str)
+    return {r["original_stem"]: r for _, r in df.iterrows()}
+
+def model_dir(root, model):
+    for d in sorted(Path(root).iterdir()):
+        if d.is_dir() and "___" in d.name and d.name.split("___")[1].rsplit("-", 1)[0] == model:
+            return d
+    return None
+
+def load_clips(root, model, master, subset_pred=None):
+    """One MEAN embedding per clip; bird/session/call_type/sib from master."""
+    d = model_dir(root, model)
+    if d is None:
+        return pd.DataFrame()
+    rows = []
+    for f in sorted(d.rglob(f"*_{model}.npy")):
+        if "/single/" not in f.as_posix():
+            continue
+        stem = f.name[:-len(f"_{model}.npy")]
+        if stem in DROP_CLIPS or stem not in master:
+            continue
+        m = master[stem]
+        if str(m.get("session_known")) != "1" or m.get("recording_id") in (None, "NA"):
+            continue
+        if subset_pred and not subset_pred(m):
+            continue
+        v = np.atleast_2d(np.load(f))
+        if v.ndim != 2 or not np.isfinite(v).all():
+            continue
+        rows.append((stem, m["bird"].lower(), m["recording_id"], m.get("call_type", "NA"),
+                     m.get("sibling_group", "unknown"), m.get("environment_class", "NA"),
+                     v.mean(0).astype(np.float32)))
+    return pd.DataFrame(rows, columns=["clip", "bird", "session", "call_type",
+                                       "sib", "env", "emb"])
+
+# ---------- 1. domain-shift proxy: within-bird recording separability ----------
+def domain_shift(df, sp, model):
+    out = []
+    for bird, sub in df.groupby("bird"):
+        rec_counts = sub["session"].value_counts()
+        recs = rec_counts[rec_counts >= 3].index          # recordings with >=3 calls
+        sub = sub[sub["session"].isin(recs)]
+        if sub["session"].nunique() < 2 or len(sub) < 12:
+            continue
+        X = np.stack(sub["emb"].to_list()); y = sub["session"].to_numpy()
+        le = LabelEncoder(); yy = le.fit_transform(y)
+        n_rec = len(le.classes_)
+        # random 5-fold: can a call's OWN recording be recovered from its acoustics?
+        accs = []
+        skf = StratifiedKFold(min(5, rec_counts.loc[recs].min()), shuffle=True, random_state=SEED)
+        for tr, te in skf.split(X, yy):
+            sc = StandardScaler().fit(X[tr])
+            clf = LogisticRegression(max_iter=1000, random_state=SEED)
+            clf.fit(sc.transform(X[tr]), yy[tr])
+            accs.append(accuracy_score(yy[te], clf.predict(sc.transform(X[te]))))
+        out.append(dict(species=sp, model=model, bird=bird, n_recordings=n_rec,
+                        n_calls=len(sub), chance=1.0 / n_rec, acc=float(np.mean(accs)),
+                        lift=float(np.mean(accs)) * n_rec))
+    return out
+
+# ---------- 2. within-call-type individual ID (session-aware centroid) ----------
+def centroid_sa(X, y, g, n_folds=5):
+    le = LabelEncoder(); yy = le.fit_transform(y)
+    accs = []
+    nf = min(n_folds, pd.Series(g).nunique())
+    if nf < 2:
+        return np.nan
+    for tr, te in GroupKFold(nf).split(X, yy, g):
+        if len(np.unique(yy[tr])) < len(le.classes_):
+            continue
+        Xtr, Xte = normalize(X[tr]), normalize(X[te])
+        cents = normalize(np.stack([Xtr[yy[tr] == c].mean(0) for c in range(len(le.classes_))]))
+        accs.append(accuracy_score(yy[te], (Xte @ cents.T).argmax(1)))
+    return float(np.mean(accs)) if accs else np.nan
+
+def within_calltype(df, sp, model):
+    out = []
+    # pooled (all call types) baseline
+    keep = df.groupby("bird").filter(lambda s: s["session"].nunique() >= 2)
+    if keep["bird"].nunique() >= 2:
+        acc = centroid_sa(np.stack(keep["emb"].to_list()), keep["bird"].to_numpy(),
+                          keep["session"].to_numpy())
+        out.append(dict(species=sp, model=model, call_type="__pooled__",
+                        n_birds=keep["bird"].nunique(), n_clips=len(keep),
+                        chance=1.0 / keep["bird"].nunique(), acc=acc))
+    for ct, sub in df.groupby("call_type"):
+        sub = sub.groupby("bird").filter(lambda s: s["session"].nunique() >= 2)
+        nb = sub["bird"].nunique()
+        if nb < 3 or len(sub) < 20:
+            continue
+        acc = centroid_sa(np.stack(sub["emb"].to_list()), sub["bird"].to_numpy(),
+                          sub["session"].to_numpy())
+        out.append(dict(species=sp, model=model, call_type=ct, n_birds=nb,
+                        n_clips=len(sub), chance=1.0 / nb, acc=acc,
+                        lift=(acc * nb if acc == acc else np.nan)))
+    return out
+
+# ---------- 3. kinship: same-family vs different-family similarity ----------
+def kinship(df, sp, model, n_perm=2000):
+    df = df[~df["sib"].isin(["unknown", "NA", None])].copy()
+    if df["sib"].nunique() < 2 or df["bird"].nunique() < 3:
+        return None
+    # bird-level mean template (across all its calls), then pairwise cosine
+    bt = df.groupby("bird").agg(sib=("sib", "first"),
+                                emb=("emb", lambda e: np.mean(np.stack(e.to_list()), 0)))
+    birds = bt.index.to_list()
+    V = normalize(np.stack(bt["emb"].to_list()))
+    sib = bt["sib"].to_numpy()
+    same, diff = [], []
+    for i in range(len(birds)):
+        for j in range(i + 1, len(birds)):
+            c = float(V[i] @ V[j])
+            (same if sib[i] == sib[j] else diff).append(c)
+    if len(same) < 2 or len(diff) < 2:
+        return None
+    gap = np.mean(same) - np.mean(diff)
+    # permutation: shuffle family labels across birds
+    rng = np.random.default_rng(SEED)
+    allpairs = [(i, j) for i in range(len(birds)) for j in range(i + 1, len(birds))]
+    sims = np.array([float(V[i] @ V[j]) for i, j in allpairs])
+    null = []
+    for _ in range(n_perm):
+        ps = rng.permutation(sib)
+        m = np.array([ps[i] == ps[j] for i, j in allpairs])
+        if m.sum() and (~m).sum():
+            null.append(sims[m].mean() - sims[~m].mean())
+    null = np.array(null)
+    p = float((np.sum(null >= gap) + 1) / (len(null) + 1))
+    return dict(species=sp, model=model, n_birds=len(birds), n_families=int(pd.Series(sib).nunique()),
+                same_sim=float(np.mean(same)), diff_sim=float(np.mean(diff)),
+                gap=float(gap), p_perm=p, n_same_pairs=len(same), n_diff_pairs=len(diff))
+
+def main():
+    ds, wct, kin = [], [], []
+    for sp in ("aa", "ag"):
+        master = load_master(sp)
+        for model in MODELS:
+            df = load_clips(ROOTS[sp], model, master)
+            if df.empty:
+                print(f"  {sp}/{model}: no clips"); continue
+            print(f"{sp}/{model}: {len(df)} clips, {df['bird'].nunique()} birds, "
+                  f"{df['session'].nunique()} recordings")
+            ds += domain_shift(df, sp, model)
+            if sp == "ag":
+                wct += within_calltype(df, sp, model)
+            k = kinship(df, sp, model)
+            if k:
+                kin.append(k)
+    outdir = Path("out"); outdir.mkdir(exist_ok=True)
+    pd.DataFrame(ds).to_csv(outdir / "domain_shift_within_bird.csv", index=False)
+    pd.DataFrame(wct).to_csv(outdir / "within_calltype_ag.csv", index=False)
+    pd.DataFrame(kin).to_csv(outdir / "kinship.csv", index=False)
+
+    # --- console summaries ---
+    dsdf = pd.DataFrame(ds)
+    print("\n=== 1. DOMAIN-SHIFT PROXY (within-bird recording separability) ===")
+    g = dsdf.groupby(["species", "model"]).apply(
+        lambda s: pd.Series({"mean_acc": s.acc.mean(), "mean_chance": s.chance.mean(),
+                             "mean_lift": s.lift.mean(), "n_birds": len(s)}))
+    print(g.round(3).to_string())
+    print("\n=== 2. WITHIN-CALL-TYPE ID (AG, session-aware centroid) ===")
+    w = pd.DataFrame(wct)
+    if not w.empty:
+        piv = w.pivot_table(index=["call_type"], columns="model", values="acc")
+        cnt = w.groupby("call_type")[["n_birds", "n_clips", "chance"]].first()
+        print(cnt.join(piv).round(3).to_string())
+    print("\n=== 3. KINSHIP (same-family vs different-family cosine) ===")
+    print(pd.DataFrame(kin).round(4).to_string())
+
+if __name__ == "__main__":
+    main()

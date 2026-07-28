@@ -1,0 +1,180 @@
+# =============================================================================
+# config.yaml
+#
+# PURPOSE
+#   Hold every analysis choice in one file. No script contains a hard-coded
+#   threshold. To change the analysis, edit this file and rerun ./run_all.sh
+#
+# RULE
+#   If a number affects a result, it belongs here. Do not put a number in a
+#   script.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Reproducibility
+# -----------------------------------------------------------------------------
+seed: 42                  # Used by every random operation in the pipeline.
+
+# -----------------------------------------------------------------------------
+# The species
+#
+# aa = Ara ambiguus (great green macaw). 8 birds. One call type.
+# ag = Ara glaucogularis (blue-throated macaw). 16 birds. 8 call types.
+# -----------------------------------------------------------------------------
+species: [aa, ag]
+
+# -----------------------------------------------------------------------------
+# The subsets
+#
+# A subset is a group of birds that is scored together.
+#
+# ag needs two subsets, because the birds are not all housed together. Birds in
+# separate rooms can be told apart by the room instead of the voice. The 'lab'
+# subset holds only the birds that share one room, so the room cannot stand in
+# for the identity. Report 'lab' as the primary ag result. Report 'all' as an
+# optimistic upper bound.
+# -----------------------------------------------------------------------------
+subsets:
+  aa:
+    all: null                              # No filter. All 8 birds.
+  ag:
+    all: null                              # No filter. All 16 birds.
+    lab: {environment_class: lab}          # The 12 birds that share one room.
+
+# -----------------------------------------------------------------------------
+# The train and test split
+#
+# The split groups on recording_id. Calls from one recording never appear in
+# both the train set and the test set.
+#
+# This is the most important choice in the analysis. Recordings carry an
+# acoustic signature. Within one bird, a model identifies the recording at 2.7
+# to 3.7 times chance. If one recording appears on both sides of the split, the
+# model uses that signature instead of the voice.
+#
+# The pipeline reports the random split as well. That result is too high. The
+# difference between the two splits is the leakage delta.
+# -----------------------------------------------------------------------------
+split:
+  n_folds: 5
+  group_by: recording_id
+  report_random_baseline: true
+
+# -----------------------------------------------------------------------------
+# Excluded clips
+#
+# acorn_upstaris_240517_0777 is one continuous recording of about 111 seconds.
+# It gives 109 windows for a 1-second model. It is not a normal call bout, and
+# it would dominate the short-window set.
+# -----------------------------------------------------------------------------
+drop_clips:
+  - acorn_upstaris_240517_0777
+
+# -----------------------------------------------------------------------------
+# The MFCC baseline
+#
+# The settings follow Lakdari et al. (2024), with three changes for this data.
+#
+# 1. The band is 500 to 8000 Hz, not their 400 to 1600 Hz. The band comes from
+#    our own audio. Call energy sits at about 1.3 to 5 kHz in both species
+#    (5th to 95th percentile).
+# 2. The sample rate is 16 kHz. The Nyquist frequency is then 8 kHz, which
+#    matches the top of the band.
+# 3. Their gibbon calls last 9 to 27 seconds. Our calls last 0.19 to 1.28
+#    seconds. One call gives 17 to 125 frames, so the standard deviation of
+#    each coefficient is noisier than in their study. Report this limit.
+# -----------------------------------------------------------------------------
+mfcc:
+  sample_rate: 16000
+  window_seconds: 0.025
+  hop_seconds: 0.010
+  fmin_hz: 500
+  fmax_hz: 8000
+  n_mels: 40
+  variants:
+    mfcc_lakdari:                # The formula of Lakdari et al. (2024).
+      n_mfcc: 12
+      deltas: false
+      cmvn: false
+    mfcc_full:                   # A modern version with more coefficients.
+      n_mfcc: 20
+      deltas: true
+      cmvn: false
+    mfcc_cmvn:                   # A control. See the caution below.
+      n_mfcc: 20
+      deltas: true
+      cmvn: true
+
+# CAUTION: Do not report mfcc_cmvn as a test of channel effects.
+# CMVN removes the mean and variance of each recording. In this data, one
+# recording holds one bird in most cases, so CMVN removes the bird as well as
+# the channel. The variant shows only that the MFCC identity signal sits in the
+# static spectral statistics of a recording. It cannot separate the voice from
+# the channel. Use src/05_diagnostics.py for that comparison instead.
+
+# -----------------------------------------------------------------------------
+# The metric-learning head
+#
+# The head is deliberately small. A deep network overfits about 480 calls.
+# The losses are supervised contrastive (Khosla et al. 2020) and prototypical
+# (Snell et al. 2017). Triplet loss and ArcFace were tested and dropped.
+# -----------------------------------------------------------------------------
+metric_learning:
+  projection_dim: 128
+  pca_dim: null                  # Set an integer to reduce the input first.
+  temperature: 0.1
+  learning_rate: 0.01
+  weight_decay: 0.001
+  max_epochs: 200
+  patience: 20                   # Early stopping on a held-out slice.
+  losses: [proto, supcon]
+  holdout_birds: 3               # Birds held out for each novel-individual repeat.
+  holdout_repeats: 12
+  knn_k: 5
+  few_shot_shots: [1, 5]
+
+# -----------------------------------------------------------------------------
+# Clustering
+#
+# The pipeline runs three algorithms. KMeans receives the true number of birds.
+# Affinity propagation and HDBSCAN infer the number of clusters, so they match
+# the open-set case.
+# -----------------------------------------------------------------------------
+clustering:
+  algorithms: [kmeans, affinity_propagation, hdbscan]
+  affinity_propagation:
+    damping: 0.9
+    max_iter: 1000
+    convergence_iter: 50
+  hdbscan:
+    min_cluster_size: 5
+  metrics: [nmi, ami, ari, purity]
+  report_inferred_k: true
+
+# CAUTION: Do not report NMI on its own.
+# NMI increases as the number of clusters increases. Affinity propagation
+# infers 37 to 85 clusters for 8 to 16 birds. Its NMI is therefore higher than
+# the NMI of KMeans, while its ARI is lower. Always report NMI next to AMI or
+# ARI, and next to the inferred number of clusters.
+
+# -----------------------------------------------------------------------------
+# Baselines
+#
+# ag is not balanced. The number of calls for each bird runs from 41 to 108.
+# Report the majority-class rate next to 1/n_birds. If you report 1/n_birds
+# alone, the result looks better than it is.
+#
+# aa is balanced at 60 calls for each bird, so 1/n_birds is correct there.
+# -----------------------------------------------------------------------------
+baselines:
+  report_inverse_n_birds: true
+  report_majority_class: true
+
+# -----------------------------------------------------------------------------
+# Models that must run on CPU
+#
+# avesecho_passt moves the model to the device but not the input audio. On
+# CUDA, every file fails and the model writes zero embeddings.
+# -----------------------------------------------------------------------------
+cpu_only_models:
+  - avesecho_passt
