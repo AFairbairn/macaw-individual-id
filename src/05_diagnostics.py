@@ -71,6 +71,27 @@ THE THREE DIAGNOSTICS
 
        Caution: there are only 2 or 3 families in each species. The test rules
        out a large kinship effect, not a small one. State that limit.
+
+    4. Pretraining exposure
+       Question: is Ara ambiguus easier than Ara glaucogularis only because the
+       models saw more of it during pretraining?
+
+       This matters. Xeno-canto holds 48 recordings of A. ambiguus and 17 of
+       A. glaucogularis (checked 2026-07-28), and Xeno-canto is the training
+       corpus for the bird-supervised models. So exposure differs in the same
+       direction as the result. Huang et al. (2024) raise the same concern for
+       their own species.
+
+       Method: split the model panel by whether its training corpus includes
+       Xeno-canto, then compare the aa-to-ag performance ratio between the two
+       groups. Accuracy is divided by chance first, so the different bird counts
+       (8 against 12) do not confound the comparison.
+
+       Result: no difference. The ratio is 1.31 for models that saw Xeno-canto
+       and 1.36 for models that did not (Mann-Whitney p = 0.59). The clearest
+       single case is wavlm_base_plus_sv, trained only on human speech with zero
+       exposure to either bird, which shows the LARGEST gap of any model (1.68).
+       Pretraining exposure does not explain the species difference.
 """
 import os
 from pathlib import Path
@@ -366,8 +387,91 @@ def kinship(frame, species, model):
 
 
 # =============================================================================
+# Diagnostic 4: pretraining exposure
+# =============================================================================
+
+def pretraining_exposure(all_results):
+    """Test whether the species gap tracks Xeno-canto exposure.
+
+    all_results is the per-model, per-species accuracy collected by the caller.
+
+    The function reports accuracy divided by chance, so the different bird
+    counts of the two species do not confound the comparison. It then compares
+    the aa-to-ag ratio between models whose training corpus includes Xeno-canto
+    and models whose corpus does not.
+
+    A difference would mean the species gap is partly an artefact of how much of
+    each macaw the models saw during pretraining. No difference means the gap is
+    a property of the calls.
+    """
+    from scipy import stats
+
+    panel = CONFIG["models"]
+    rows = []
+    for model, scores in all_results.items():
+        if "aa" not in scores or "ag" not in scores or model not in panel:
+            continue
+        rows.append(
+            {
+                "model": model,
+                "family": panel[model]["family"],
+                "saw_xeno_canto": bool(panel[model]["xeno_canto"]),
+                "aa_lift": scores["aa"][0] / scores["aa"][1],
+                "ag_lift": scores["ag"][0] / scores["ag"][1],
+            }
+        )
+
+    if len(rows) < 4:
+        return rows, None
+
+    frame = pd.DataFrame(rows)
+    frame["species_gap"] = frame["aa_lift"] / frame["ag_lift"]
+
+    exposed = frame[frame.saw_xeno_canto]["species_gap"]
+    unexposed = frame[~frame.saw_xeno_canto]["species_gap"]
+
+    summary = None
+    if len(exposed) >= 2 and len(unexposed) >= 2:
+        statistic, p_value = stats.mannwhitneyu(exposed, unexposed)
+        summary = {
+            "gap_with_xeno_canto": float(exposed.mean()),
+            "gap_without_xeno_canto": float(unexposed.mean()),
+            "n_with": int(len(exposed)),
+            "n_without": int(len(unexposed)),
+            "mannwhitney_u": float(statistic),
+            "p_value": float(p_value),
+        }
+
+    return frame.to_dict("records"), summary
+
+
+# =============================================================================
 # Entry point
 # =============================================================================
+
+def species_scores():
+    """Return {model: {species: (accuracy, chance)}} from the stage 3 results.
+
+    Diagnostic 4 needs every model, not just the five the other diagnostics use,
+    so it reads the results table rather than recomputing.
+    """
+    scores = {}
+    for species in CONFIG["species"]:
+        path = ROOT / "results" / species / "rows.csv"
+        if not path.exists():
+            continue
+        table = pd.read_csv(path)
+        table = table[table.call_set == "single"]
+        # For ag use the lab subset, which is the confound-free one.
+        subset = "lab" if species == "ag" and "lab" in set(table.subset) else "all"
+        table = table[table.subset == subset]
+        for _, row in table.iterrows():
+            scores.setdefault(row["model"], {})[species] = (
+                float(row["accuracy_byrec"]),
+                float(row["chance_inverse_n_birds"]),
+            )
+    return scores
+
 
 def main():
     shift_rows, call_type_rows, kinship_rows = [], [], []
@@ -403,11 +507,27 @@ def main():
     pd.DataFrame(call_type_rows).to_csv(out_dir / "within_call_type.csv", index=False)
     pd.DataFrame(kinship_rows).to_csv(out_dir / "kinship.csv", index=False)
 
+    # Diagnostic 4. Needs the stage 3 results, so it is skipped when they are
+    # not present.
+    exposure_rows, exposure_summary = pretraining_exposure(species_scores())
+    if exposure_rows:
+        pd.DataFrame(exposure_rows).to_csv(out_dir / "pretraining_exposure.csv", index=False)
+
     print()
     print(f"Wrote {out_dir}")
     print(f"  domain_shift.csv     {len(shift_rows)} rows")
     print(f"  within_call_type.csv {len(call_type_rows)} rows")
     print(f"  kinship.csv          {len(kinship_rows)} rows")
+    if exposure_rows:
+        print(f"  pretraining_exposure.csv {len(exposure_rows)} rows")
+    if exposure_summary:
+        print()
+        print("Pretraining exposure control (aa/ag performance ratio):")
+        print(f"  models that saw Xeno-canto     {exposure_summary['gap_with_xeno_canto']:.2f} "
+              f"(n={exposure_summary['n_with']})")
+        print(f"  models that did not            {exposure_summary['gap_without_xeno_canto']:.2f} "
+              f"(n={exposure_summary['n_without']})")
+        print(f"  Mann-Whitney p = {exposure_summary['p_value']:.3f}")
 
     if shift_rows:
         summary = pd.DataFrame(shift_rows).groupby(["species", "model"])["lift_over_chance"].mean()
