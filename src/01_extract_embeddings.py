@@ -49,8 +49,8 @@ CAUTION
 WARNING
     Do not run `pip install -U jax[cuda12]` to make the JAX models use the GPU.
     The -U flag upgrades numpy to version 2, which breaks the pinned torch and
-    bacpipe environment. To repair a broken environment, reinstall from
-    environment.lock/packages.txt.
+    bacpipe environment. To repair a broken environment, delete it and rebuild
+    it from environment.yml.
 
 NOTE
     bacpipe prints many tracebacks after it writes the embeddings. Those

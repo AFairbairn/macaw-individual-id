@@ -26,9 +26,17 @@ conda env create -f environment.yml
 conda activate parrot-id
 ```
 
-`run_all.sh` checks the environment before it runs anything. It compares the installed
-packages and the model weight checksums against `environment.lock/`, and it reports a
-difference. To stop the run on a difference, set `STRICT_ENV=1`.
+To record the environment that produced a set of results, run this once, in the activated
+environment on the machine that produced them.
+
+```bash
+python src/08_freeze_environment.py freeze
+```
+
+That writes `environment.lock/`, which holds every installed package version, an md5 checksum
+for every model weight file, and the Python, OS and CUDA versions. On every later run,
+`run_all.sh` compares the environment against that record and reports a difference. To stop
+the run on a difference, set `STRICT_ENV=1`.
 
 ### 1.2 Data
 
@@ -162,7 +170,6 @@ macaw-individual-id/
 ├── environment.yml               Pinned dependencies.
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
-├── environment.lock/             The recorded package and weight checksums.
 ├── docs/
 │   ├── GLOSSARY.md               One meaning for every term.
 │   └── WRITING_STANDARD.md       How this repository is written.
@@ -342,8 +349,7 @@ Warning: Do not run `pip install -U jax[cuda12]`. The `-U` flag upgrades numpy t
 which breaks the pinned torch and bacpipe environment.
 
 To repair a broken environment, delete it and rebuild it from `environment.yml`. Then run
-`python src/08_freeze_environment.py verify` to confirm that the rebuilt environment matches
-`environment.lock/`.
+`python src/08_freeze_environment.py verify`.
 
 ### 8.5 Stage 4 writes only at the end of a subset
 

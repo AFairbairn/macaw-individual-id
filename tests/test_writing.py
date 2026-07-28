@@ -85,7 +85,7 @@ REQUIRED_HEADINGS = ["PURPOSE", "USAGE", "INPUT", "OUTPUT"]
 # Rule 7. A path in prose must exist, unless the pipeline generates it or the
 # path holds a placeholder such as <species>.
 GENERATED_PREFIXES = ("results/", "logs/", "bacpipe_results/", "mfcc_results/",
-                      "supplementary/", "data/")
+                      "supplementary/", "data/", "environment.lock")
 PATH_IN_PROSE = re.compile(r"\b((?:src|tests|docs|environment\.lock)/[\w./-]+|"
                            r"(?:README\.md|config\.yaml|run_all\.sh|environment\.yml))")
 
