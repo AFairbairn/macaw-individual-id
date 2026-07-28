@@ -97,7 +97,6 @@ CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 
 SEED = CONFIG["seed"]
 N_FOLDS = CONFIG["split"]["n_folds"]
-DROP_CLIPS = set(CONFIG["drop_clips"])
 
 # The dataset can live outside the repository. run_all.sh sets PARROT_DATA.
 DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
@@ -170,7 +169,7 @@ def load_embeddings(model_dir, model, master, single_stems):
     for path in sorted(model_dir.rglob(f"*_{model}.npy")):
         stem = path.name[: -len(f"_{model}.npy")]
 
-        if stem in DROP_CLIPS or stem not in master:
+        if stem not in master:
             continue
 
         record = master[stem]
@@ -413,7 +412,7 @@ def run_verification(features, labels, groups):
     return auc, eer
 
 
-def run_clustering(features, labels):
+def run_clustering(features, labels, groups):
     """Cluster the embeddings and score the clusters against the bird identity.
 
     One algorithm runs: KMeans, given the true number of birds. Three metrics
@@ -424,12 +423,20 @@ def run_clustering(features, labels):
     clusters increases, so it favours any method that produces many clusters.
     Read it next to ARI.
 
-    NOTE ON THE LIMITATION: This function clusters every call at once. There is
-    no train and test split, because clustering needs no training. That matches
-    how the field reports clustering, but it means a cluster can form around a
-    recording instead of a bird. Read these numbers together with the
-    domain-shift diagnostic in 05_diagnostics.py, which measures how strong the
-    per-recording signature is.
+    NOTE ON THE SPLIT: This function clusters every call at once. There is no
+    train and test split, because clustering needs no training. That matches how
+    the field reports clustering (Lakdari et al. 2024, Clink et al. 2021).
+
+    A session-aware clustering protocol was considered and rejected. Clustering
+    has no training step, so there is nothing for a split to protect. Any
+    "session-aware" variant would simply cluster fewer calls, which lowers the
+    scores for a reason that has nothing to do with the question.
+
+    The real concern is different, and it is measured directly: a cluster can
+    form around a RECORDING instead of around a BIRD. So the function scores the
+    same clustering against both labellings. Compare `cluster_ari` (against the
+    bird) with `cluster_ari_recording` (against the recording). If the second is
+    higher, the structure the model finds is the recording, not the voice.
 
     Affinity propagation and HDBSCAN were tested and removed. Affinity
     propagation inferred 37 to 85 clusters for 8 to 16 birds, and HDBSCAN
@@ -441,9 +448,13 @@ def run_clustering(features, labels):
     assigned = KMeans(n_birds, random_state=SEED, n_init=10).fit_predict(vectors)
 
     return {
+        # Against the bird. This is the result.
         "cluster_ari": float(adjusted_rand_score(labels, assigned)),
         "cluster_ami": float(adjusted_mutual_info_score(labels, assigned)),
         "cluster_nmi": float(normalized_mutual_info_score(labels, assigned)),
+        # Against the recording. This is the control. A higher value here than
+        # above means the clusters track the recording, not the bird.
+        "cluster_ari_recording": float(adjusted_rand_score(groups, assigned)),
     }
 
 
@@ -549,7 +560,7 @@ def score_model(frame, species, subset, call_set, model):
         # Window-level accuracy, kept so the clip-level fusion can be checked.
         "accuracy_byrec_window_level": probe_grouped["accuracy"],
     }
-    row.update(run_clustering(features, labels))
+    row.update(run_clustering(features, labels, groups))
 
     predictions = [
         {

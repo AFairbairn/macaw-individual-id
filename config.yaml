@@ -96,24 +96,20 @@ split:
   report_random_baseline: true
 
 # -----------------------------------------------------------------------------
-# Excluded clips
+# Excluded clips: NONE.
 #
-# Each entry is a segmentation error: a file that holds far more than one call.
-# Give the reason and the evidence for every clip listed here.
+# The pipeline does not exclude any clip. Every clip in the dataset is analysed.
+#
+# Two files were found to be segmentation errors and were removed from the
+# PUBLISHED DATASET rather than filtered here:
+#   acorn_upstaris_240517_0777  (aa)  111 s, one continuous recording.
+#   john_241004_doublese_01     (ag)  19.1 s, 21x the median doublese call and
+#                                     13x the next longest ag clip.
+#
+# Removing bad data from the dataset, rather than hiding it behind a filter,
+# means the published dataset is exactly what was analysed. See the dataset
+# README for the record.
 # -----------------------------------------------------------------------------
-drop_clips:
-  # aa. One continuous recording of about 111 s. It gives 109 windows for a 1 s
-  # model. It is not a normal call bout and it would dominate the short-window
-  # set.
-  - acorn_upstaris_240517_0777
-  # ag. 19.1 s, labelled as one 'doublese' call. That is 21 times the median
-  # doublese (0.94 s) and 13 times the next longest clip in the whole ag set
-  # (1.44 s), so it is a segmentation error, not a call. Its recording could not
-  # be resolved (session_known = 0), so it was already excluded from every
-  # session-aware score. It is listed here as well, so that it is also excluded
-  # from the reported duration statistics and from any future random-split
-  # analysis.
-  - john_241004_doublese_01
 
 # -----------------------------------------------------------------------------
 # The MFCC baseline

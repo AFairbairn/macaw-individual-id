@@ -89,7 +89,6 @@ DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
 
 SEED = CONFIG["seed"]
 N_FOLDS = CONFIG["split"]["n_folds"]
-DROP_CLIPS = set(CONFIG["drop_clips"])
 
 # The diagnostics use the leading models plus the MFCC baseline. The purpose is
 # to size an effect, not to rebuild the whole leaderboard.
@@ -136,7 +135,7 @@ def load_clips(species, model):
     for path in sorted(model_dir.rglob(f"*_{model}.npy")):
         stem = path.name[: -len(f"_{model}.npy")]
 
-        if stem in DROP_CLIPS or stem not in records:
+        if stem not in records:
             continue
 
         record = records[stem]

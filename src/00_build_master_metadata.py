@@ -84,11 +84,15 @@ REQUIRED_COLUMNS = [
 # changed, so the numbers in the manuscript no longer apply.
 #
 # The published dataset holds single calls only, because the paper reports the
-# single-call set. The original aa collection also holds 255 repeated call
-# bouts. Those bouts are not published and not analysed here.
+# single-call set. The original aa collection also holds repeated call bouts,
+# published as a separate supplementary set.
+#
+# Two files were removed as segmentation errors and are absent from the dataset:
+# acorn_upstaris_240517_0777 (aa, 111 s, a bout) and john_241004_doublese_01
+# (ag, 19.1 s). The pipeline filters no clip; bad data was removed at source.
 EXPECTED = {
     "aa": {"clips": 480, "single": 480, "birds": 8, "recordings": 211},
-    "ag": {"clips": 1061, "single": 1061, "birds": 16, "recordings": 74},
+    "ag": {"clips": 1060, "single": 1060, "birds": 16, "recordings": 74},
 }
 
 

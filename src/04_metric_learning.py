@@ -124,7 +124,6 @@ DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
 
 SEED = CONFIG["seed"]
 N_FOLDS = CONFIG["split"]["n_folds"]
-DROP_CLIPS = set(CONFIG["drop_clips"])
 
 SETTINGS = CONFIG["metric_learning"]
 PROJECTION_DIM = SETTINGS["projection_dim"]
@@ -191,7 +190,7 @@ def load_embeddings(model_dir, model, master, keep_stems):
     for path in sorted(model_dir.rglob(f"*_{model}.npy")):
         stem = path.name[: -len(f"_{model}.npy")]
 
-        if stem in DROP_CLIPS or stem not in master or stem not in keep_stems:
+        if stem not in master or stem not in keep_stems:
             continue
 
         record = master[stem]
