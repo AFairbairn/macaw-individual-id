@@ -4,8 +4,8 @@ This repository produces every result table in the paper on acoustic individual 
 in two macaw species. It covers 15 pre-trained embedding models, an MFCC baseline, and a
 metric-learning head.
 
-The pipeline produces DATA, not figures. Every output is a CSV file. Figures are made
-separately from those files, so a change to a figure never changes a result.
+Every output of the pipeline is a CSV file. Figures are made separately from those files, so
+a change to a figure never changes a result.
 
 The species are:
 
@@ -14,26 +14,103 @@ The species are:
 
 ---
 
-## 1. Quick start
+## 1. Requirements
 
-To reproduce every result table from the published embeddings, run these commands. This path
-does not need a GPU.
+### 1.1 Software
+
+Install [conda](https://docs.conda.io), then create the environment. `environment.yml` pins
+every version.
 
 ```bash
 conda env create -f environment.yml
 conda activate parrot-id
+```
+
+`run_all.sh` checks the environment before it runs anything. It compares the installed
+packages and the model weight checksums against `environment.lock/`, and it reports a
+difference. To stop the run on a difference, set `STRICT_ENV=1`.
+
+### 1.2 Data
+
+The audio and the embeddings are archived separately from the code. Download the archive,
+then point `PARROT_DATA` at it.
+
+```bash
+export PARROT_DATA=/path/to/the/dataset
+```
+
+If `PARROT_DATA` is not set, the pipeline reads `./data`. That directory holds the master
+metadata tables only.
+
+The archive holds three things.
+
+| What | Where it goes | Which path needs it |
+|---|---|---|
+| The audio | `$PARROT_DATA` | `./run_all.sh all` |
+| The 15 model embeddings | `bacpipe_results/` in the repository | `./run_all.sh analyse` |
+| The MFCC features | `mfcc_results/` in the repository | `./run_all.sh analyse` |
+
+The dataset follows the metadata framework of Knight et al. (2024).
+
+- Recording method: targeted.
+- Spatial extent: single location.
+- Temporal extent: multiple recordings within one season.
+- Annotation: call level.
+
+### 1.3 Hardware
+
+| Stage | Hardware |
+|---|---|
+| 0, 2, 3, 4, 5 | 8 CPU cores and 32 GB of memory. |
+| 1 | One GPU. |
+
+Stages 2 to 5 run scikit-learn on fewer than 1,100 vectors, so a GPU gives no useful speed
+increase.
+
+Stage 1 extracts the embeddings. A small GPU is sufficient. On the LRZ AI Systems cluster,
+select the P100. Do not queue for the A100, because the extra memory gives no benefit here.
+
+Note: Three groups of models always run on CPU, even on a GPU node.
+
+- `perch_bird`, `perch_v2`, and `surfperch` use JAX.
+- `birdnet` uses TensorFlow.
+- `avesecho_passt` is pinned to CPU. See section 8.3.
+
+---
+
+## 2. How to run
+
+To reproduce every result table from the published embeddings, run the analysis path. It
+runs on CPU.
+
+```bash
 ./run_all.sh analyse
 ```
+
+To reproduce the pipeline from the raw audio instead, run the full path. It extracts the
+embeddings first, so it needs a GPU and the audio.
+
+```bash
+./run_all.sh all
+```
+
+To extract the embeddings and stop there, run `./run_all.sh embed`.
 
 The outputs go to `results/`. Each stage prints its duration when it finishes, and the run
 ends with a table of all of them.
 
-To reproduce the pipeline from the raw audio instead, run `./run_all.sh all`. This path
-extracts the embeddings first and needs a GPU. See Section 4.
+Every stage skips work it has already done, so a rerun after a failure continues from the
+point it stopped.
+
+The pipeline detects the device. To override the detected device, set `FORCE_DEVICE`.
+
+```bash
+FORCE_DEVICE=cpu ./run_all.sh analyse
+```
 
 ---
 
-## 2. Terms
+## 3. Terms
 
 Every term used in this repository has one meaning, and that meaning is in
 `docs/GLOSSARY.md`. The code, the documentation and the manuscript use the same word for the
@@ -58,7 +135,7 @@ The rules that govern how this repository is written are in `docs/WRITING_STANDA
 
 ---
 
-## 3. What the pipeline does
+## 4. What the pipeline does
 
 The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
 
@@ -76,40 +153,12 @@ bird identity and the `recording_id` of every clip. Every later stage reads it.
 
 ---
 
-## 4. Hardware
-
-### 4.1 Analysis stages
-
-Stages 2 to 5 run on CPU. A GPU gives no useful speed increase, because the work is
-scikit-learn on fewer than 1,100 vectors. Use 8 CPU cores and 32 GB of memory.
-
-### 4.2 Embedding extraction
-
-Stage 1 uses a GPU. A small GPU is sufficient. On the LRZ AI Systems cluster, select the
-P100. Do not queue for the A100, because the extra memory gives no benefit here.
-
-Note: Three models always run on CPU. This is expected behaviour and not a failure.
-
-- `perch_bird`, `perch_v2`, and `surfperch` use JAX.
-- `birdnet` uses TensorFlow.
-- `avesecho_passt` is pinned to CPU. See Section 8.3.
-
-### 4.3 Device selection
-
-The pipeline detects the device automatically. To override the detected device, set
-`FORCE_DEVICE`.
-
-```bash
-FORCE_DEVICE=cpu ./run_all.sh analyse
-```
-
----
-
 ## 5. Repository layout
 
 ```
 macaw-individual-id/
 ├── README.md                     This file.
+├── LICENSE                       MIT.
 ├── environment.yml               Pinned dependencies.
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
@@ -303,17 +352,3 @@ middle of a subset, the work for that subset is lost.
 
 Run stage 4 inside `tmux` or `screen`, or submit it as a batch job. Stage 3 is different. It
 appends its results for each model and skips completed work when you rerun it.
-
----
-
-## 9. Data
-
-The audio and the embeddings are archived separately.
-
-The dataset follows the metadata framework of Knight et al. (2024).
-
-- Recording method: targeted.
-- Spatial extent: single location.
-- Temporal extent: multiple recordings within one season.
-- Annotation: call level.
-

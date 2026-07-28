@@ -155,7 +155,7 @@ fi
 if [[ "$DEVICE" == "cpu" ]]; then
   cat <<'EOF'
   Stages 2 to 5 are CPU bound. They run normally on CPU.
-  Stage 1 on CPU is very slow. Expect about one day for 15 models and 1,541 clips.
+  Stage 1 on CPU is very slow.
   To reproduce the analysis only, run: ./run_all.sh analyse
 EOF
 fi

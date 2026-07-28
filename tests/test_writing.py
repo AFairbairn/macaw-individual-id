@@ -61,12 +61,17 @@ BANNED_TERMS = [
     "zero-shot",
 ]
 
-# Rule 1. A hedge word in front of a number means the number was not measured.
+# Rule 1. A hedge word in front of a quantity means it was not measured. The
+# quantity can be a digit or a number word ('about one day' is an estimate).
 HEDGE_BEFORE_NUMBER = re.compile(
-    r"\b(about|around|roughly|approximately|circa|nearly|some|maybe|perhaps)\s+[0-9]",
+    r"\b(about|around|roughly|approximately|circa|nearly|some|maybe|perhaps)\s+"
+    r"(?:[0-9]|one|two|three|four|five|six|seven|eight|nine|ten|half|dozen)\b",
     re.IGNORECASE,
 )
 TILDE_NUMBER = re.compile(r"~\s*[0-9]")
+
+# The start of a here-document, and the word that ends it.
+HEREDOC_START = re.compile(r"<<-?\s*'?\"?([A-Za-z_][A-Za-z0-9_]*)'?\"?\s*$")
 
 # The shell commands that print a message to the person running the pipeline.
 PRINTED_TEXT = re.compile(r'\b(?:say|begin_stage|end_stage|die|echo)\s+"([^"\n]*)"')
@@ -117,6 +122,7 @@ def prose_of(path):
                 for quoted in PRINTED_TEXT.findall(code):
                     if quoted.strip() and not quoted.startswith("$"):
                         out.append((i + 1, quoted))
+        out += heredoc_lines(lines)
         return out
 
     # Python. The docstrings plus the comment lines.
@@ -141,6 +147,27 @@ def prose_of(path):
     return [(i, line) for i, line in out if line.strip()]
 
 
+def heredoc_lines(lines):
+    """Return the (line number, line) pairs inside every here-document.
+
+    A here-document holds text that the script prints, so it follows the same
+    rules as a comment. The quoted-string reader above does not see it.
+    """
+    out, terminator = [], None
+    for i, line in enumerate(lines, start=1):
+        if terminator is None:
+            match = HEREDOC_START.search(line)
+            if match:
+                terminator = match.group(1)
+            continue
+        if line.strip() == terminator:
+            terminator = None
+            continue
+        if line.strip():
+            out.append((i, line))
+    return out
+
+
 def report(path, hits):
     """Return one readable message for a list of (line number, line) hits."""
     name = path.relative_to(ROOT)
@@ -150,7 +177,7 @@ def report(path, hits):
 @pytest.mark.parametrize("path", ALL_FILES, ids=lambda p: str(p.relative_to(ROOT)))
 def test_no_estimated_number(path):
     """Rule 1. Every number is measured, from the data, or from a cited paper."""
-    if path.name == "WRITING_STANDARD.md":
+    if path.name in ("WRITING_STANDARD.md", "test_writing.py"):
         pytest.skip("This file quotes the wrong form as the example.")
     hits = [(n, l) for n, l in prose_of(path)
             if HEDGE_BEFORE_NUMBER.search(l) or TILDE_NUMBER.search(l)]
