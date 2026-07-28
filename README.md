@@ -59,7 +59,7 @@ The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
 | 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU | 1 min |
 | 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU | 1 to 2 h |
 | 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU | 3 to 6 h |
-| 5 | `05_diagnostics.py`, `06_tables_figures.py`, `07_manifest.py` | `results/` | CPU | 10 min |
+| 5 | `05_diagnostics.py`, `06_tables_figures.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/` | CPU | 30 min |
 
 Stage 0 builds the master metadata table. This table is the single source of truth for the
 bird identity and the `recording_id` of every clip. Every later stage reads it.
@@ -98,11 +98,12 @@ FORCE_DEVICE=cpu ./run_all.sh analyse
 ## 5. Repository layout
 
 ```
-parrot-individual-id/
+macaw-individual-id/
 ├── README.md                     This file.
 ├── environment.yml               Pinned dependencies.
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
+├── environment.lock/             The recorded package and weight checksums.
 ├── src/
 │   ├── 00_build_master_metadata.py
 │   ├── 01_extract_embeddings.py
@@ -112,12 +113,12 @@ parrot-individual-id/
 │   ├── 04_metric_learning.py
 │   ├── 05_diagnostics.py
 │   ├── 06_tables_figures.py
-│   └── 07_manifest.py
+│   ├── 07_manifest.py
+│   ├── 08_freeze_environment.py
+│   └── 09_supplementary_bouts.py
 ├── tests/
 │   └── test_splits.py            Asserts that the split does not leak.
-├── docs/
-│   └── METHODS.md                Every method choice, with its justification.
-├── data/                         Audio and metadata. Not in version control.
+├── data/<sp>/metadata/           The master tables. Tracked here.
 └── results/                      All outputs. Regenerated, never edited by hand.
 ```
 
@@ -143,7 +144,23 @@ The pipeline reports both splits:
 The difference between the two is the leakage delta. The delta is 0.08 to 0.10 for `aa` and
 0.22 to 0.29 for `ag`.
 
-### 6.2 The subsets
+### 6.2 The call set
+
+The analysis uses single calls only, for both species. One clip holds one call.
+This is the matched acoustic unit across the two species.
+
+The *Ara ambiguus* collection also holds 255 repeated call bouts. A bout gives a
+model more acoustic material, and it raises *Ara ambiguus* accuracy by 0.03 to
+0.07. *Ara glaucogularis* has no bouts.
+
+Warning: Do not add the bouts to the main analysis. The main result of the paper
+is that *Ara ambiguus* is easier to identify than *Ara glaucogularis*. If *Ara
+ambiguus* used bouts and *Ara glaucogularis* did not, part of that difference
+would come from the acoustic unit rather than from the biology.
+
+`src/09_supplementary_bouts.py` scores the bouts separately, for the supplement.
+
+### 6.3 The subsets
 
 `ag` is reported for two subsets, because the birds are not all housed together.
 
@@ -152,7 +169,7 @@ The difference between the two is the leakage delta. The delta is 0.08 to 0.10 f
 - `lab` holds the 12 birds that share one room. The room cannot stand in for the identity.
   This result is the honest one. Report it as the primary `ag` result.
 
-### 6.3 The metrics
+### 6.4 The metrics
 
 The pipeline reports five metrics for every model.
 
@@ -161,8 +178,8 @@ The pipeline reports five metrics for every model.
    the enrolment case.
 3. **Verification EER and AUROC.** Positive pairs are the same bird in different recordings.
    This metric generalises to the open-set case.
-4. **Clustering.** KMeans, affinity propagation, and HDBSCAN. See Section 6.5.
-5. **Encounter accuracy.** See Section 6.4.
+4. **Clustering.** KMeans, affinity propagation, and HDBSCAN. See Section 6.6.
+5. **Encounter accuracy.** See Section 6.5.
 
 Caution: `ag` is not balanced. The number of calls for each bird runs from 41 to 108. Report
 the majority-class baseline (0.108 for `all`, 0.111 for `lab`) next to `1/n_birds`. If you
@@ -170,7 +187,7 @@ report `1/n_birds` alone, the result looks better than it is.
 
 `aa` is balanced at 60 calls for each bird, so `1/n_birds` (0.125) is correct there.
 
-### 6.4 Encounter accuracy and its assumption
+### 6.5 Encounter accuracy and its assumption
 
 Encounter accuracy pools the calls of one bird within one recording into one mean query. The
 query is then matched to the nearest enrolled centroid.
@@ -187,7 +204,7 @@ birds into one query.
 `06_tables_figures.py` also reports the single-bird recordings on their own, as a sensitivity
 check.
 
-### 6.5 Clustering metrics
+### 6.6 Clustering metrics
 
 The pipeline reports NMI, AMI, ARI, and the inferred number of clusters.
 

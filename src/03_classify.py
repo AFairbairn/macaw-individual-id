@@ -629,11 +629,17 @@ def main():
         keep = subset_filter(species, subset)
         keep_stems = {stem for stem, record in master.items() if keep(record)}
 
-        # Score the repeated call set only when repeated calls exist.
-        has_repeated = any(
-            str(master[s].get("kind")) == "repeated" for s in keep_stems if s in master
-        )
-        call_sets = [("single", True), ("all", False)] if has_repeated else [("single", True)]
+        # The main analysis uses single calls only, for both species. This is
+        # the matched acoustic unit across the two species.
+        #
+        # aa also holds repeated call bouts. A bout carries more acoustic
+        # material, so including it raises aa accuracy by 0.03 to 0.07. ag has
+        # no bouts. To include the bouts for aa alone would put part of the
+        # reported species difference down to the call set rather than the
+        # biology, so the main analysis excludes them.
+        #
+        # 09_supplementary_bouts.py scores the bouts separately.
+        call_sets = [(CONFIG["call_set"], True)]
 
         for call_set, single_only in call_sets:
             for model, directory in sorted(model_dirs.items()):

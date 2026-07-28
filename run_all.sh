@@ -252,6 +252,11 @@ say "STAGE 5 of 5   Diagnostics, tables, figures, manifest   [CPU, 10 minutes]"
 # =============================================================================
 python src/05_diagnostics.py     # Domain shift, within call type, kinship.
 python src/06_tables_figures.py  # Every table and figure in the paper.
+
+# The supplementary bout comparison. It runs only when the supplementary audio
+# is present, and it never enters a main result. See src/09_supplementary_bouts.py
+python src/09_supplementary_bouts.py
+
 python src/07_manifest.py        # An md5 checksum for every output.
 
 say "COMPLETE"

@@ -42,6 +42,41 @@ subsets:
     lab: {environment_class: lab}          # The 12 birds that share one room.
 
 # -----------------------------------------------------------------------------
+# The call set
+#
+# The analysis uses single calls only, for both species. One clip holds one
+# call. This is the matched unit across the two species.
+#
+# WHY THE MATCHED UNIT MATTERS
+#   The aa collection also holds 255 repeated call bouts. A bout holds several
+#   calls, so it gives the model more acoustic material. Adding the bouts raises
+#   aa accuracy by 0.03 to 0.07 (perch_bird 0.610 to 0.678, birdnet 0.619 to
+#   0.647).
+#
+#   ag has no bouts. If aa used bouts and ag did not, part of the reported
+#   difference between the two species would come from the acoustic unit rather
+#   than from the biology. The headline result of the paper is that aa is easier
+#   than ag, so that difference must not be manufactured by the call set.
+#
+#   The bouts are published as a supplementary set and analysed separately. See
+#   supplementary_call_sets below.
+# -----------------------------------------------------------------------------
+call_set: single
+
+# The supplementary analysis. This runs only when the supplementary audio is
+# present. It answers one question: does more acoustic material for each
+# detection improve identification? It never enters the cross-species
+# comparison.
+supplementary_call_sets:
+  aa_repeated_bouts:
+    species: aa
+    kind: repeated
+    purpose: >
+      Sensitivity check on the amount of acoustic material for each detection.
+      Reported in the supplement only. Excluded from every main result and from
+      every cross-species comparison.
+
+# -----------------------------------------------------------------------------
 # The train and test split
 #
 # The split groups on recording_id. Calls from one recording never appear in
