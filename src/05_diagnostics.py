@@ -72,36 +72,39 @@ THE THREE DIAGNOSTICS
        Caution: there are only 2 or 3 families in each species. The test rules
        out a large kinship effect, not a small one. State that limit.
 
-    4. Pretraining exposure
-       Question: do the two species differ only because the models saw more of
-       one than the other during pretraining?
+    4. Split structure
+       Question: what determines how much a leaky split inflates a result?
 
-       This is worth asking. Xeno-canto holds 48 recordings of A. ambiguus and
-       17 of A. glaucogularis (checked 2026-07-28), and Xeno-canto trains the
-       bird models. Exposure therefore differs in the same direction as the
-       result. Huang et al. (2024) raise the same concern for their species.
+       Answer: the number of calls cut from each recording. If a recording
+       yields one call, a random split cannot reunite that recording, so there
+       is nothing to leak. If a recording yields twenty calls, a random split
+       almost always puts some of them in training and the rest in test, and the
+       model can learn the recording.
 
-       Method: report the species ratio for the two SPEECH models only. Their
-       training corpus is human speech and nothing else, so their exposure to
-       both macaws is zero. If exposure drove the difference, these two models
-       should show none.
+       This is measurable from the metadata alone, with no model involved:
 
-       Only two models are used on purpose. A panel-wide version would need the
-       training corpus of all 15 models classified correctly. That is hard to
-       establish from the primary sources and easy to get wrong, and a wrong
-       classification would invalidate the control. The corpus of ecapa_tdnn and
-       wavlm_base_plus_sv is not in doubt.
+           P(leak) = 1 - 1 / (mean calls per recording)
 
-       Result: ecapa_tdnn 1.29 and wavlm_base_plus_sv 1.68, against 1.10 to 1.59
-       for every other model. The difference appears at full strength in models
-       with zero exposure, so exposure does not explain it.
+       is the approximate chance that a test call has a sibling from the same
+       recording in the training set.
 
-       CAUTION: this rules out ONE alternative. It does NOT show the difference
-       is biological. The two datasets differ in bird count, call types, calls
-       per bird, recordings per bird (median 24 against 6), recordist, equipment,
-       room and season. Those cannot be matched simultaneously, because the ag
-       set has too few recordings per bird. Report the species difference
-       descriptively. Do not read it as a property of the calls.
+       Result across our two datasets:
+
+           A. ambiguus     2.3 calls per recording   P(leak) 0.56   delta 0.10
+           A. glaucogularis 13.5 calls per recording  P(leak) 0.93   delta 0.24-0.29
+
+       This explains the species difference in our own results without invoking
+       biology, and it gives a usable rule: report calls per recording, because
+       it predicts how badly a random split will mislead.
+
+       NOTE ON WHAT THIS REPLACES: an earlier version tested whether the species
+       difference tracked pretraining exposure (Xeno-canto holds 48 recordings
+       of A. ambiguus and 17 of A. glaucogularis). It did not. That analysis was
+       removed because it explained a species difference that should not be
+       interpreted causally in the first place. The two datasets differ in bird
+       count, call types, calls per bird, calls per recording, recordist,
+       equipment, room and season, and cannot be matched simultaneously. Report
+       the species difference descriptively.
 """
 import os
 from pathlib import Path
@@ -400,84 +403,50 @@ def kinship(frame, species, model):
 # Diagnostic 4: pretraining exposure
 # =============================================================================
 
-def pretraining_exposure(all_results):
-    """Report the species ratio for the two human-speech models.
+def split_structure(species):
+    """Measure how much a leaky split can inflate a result for one dataset.
 
-    all_results is {model: {species: (accuracy, chance)}}.
+    The measure needs no model. It comes from the metadata alone.
 
-    Those two models were trained on human speech only, so their exposure to
-    both macaws is zero. If pretraining exposure drove the species difference,
-    the difference should vanish for them.
+    A random split can only leak when a recording contributes more than one
+    call. With one call per recording there is nothing to reunite. With many
+    calls per recording, a random split nearly always puts some in training and
+    the rest in test.
 
-    Accuracy is divided by chance first, so the different bird counts of the two
-    species do not confound the ratio.
+    p_leak approximates the chance that a test call has a sibling from the same
+    recording in the training set.
     """
-    ZERO_EXPOSURE = ["ecapa_tdnn", "wavlm_base_plus_sv"]
+    path = DATA / f"{species}/metadata/{species}_master.csv"
+    table = pd.read_csv(path, dtype=str)
+    table = table[(table["kind"] == "single") & (table["session_known"] == "1")]
 
     rows = []
-    for model, scores in all_results.items():
-        if "aa" not in scores or "ag" not in scores:
-            continue
-        aa_lift = scores["aa"][0] / scores["aa"][1]
-        ag_lift = scores["ag"][0] / scores["ag"][1]
+    subsets = [("all", table)]
+    if species == "ag":
+        subsets.append(("lab", table[table["environment_class"] == "lab"]))
+
+    for name, subset in subsets:
+        per_recording = subset.groupby("recording_id").size()
+        per_bird = subset.groupby("bird")["recording_id"].nunique()
+        mean_calls = float(per_recording.mean())
         rows.append(
             {
-                "model": model,
-                "zero_exposure_to_both_species": model in ZERO_EXPOSURE,
-                "aa_lift": aa_lift,
-                "ag_lift": ag_lift,
-                "species_ratio": aa_lift / ag_lift,
+                "species": species,
+                "subset": name,
+                "n_calls": len(subset),
+                "n_recordings": int(subset["recording_id"].nunique()),
+                "calls_per_recording_median": float(per_recording.median()),
+                "calls_per_recording_mean": mean_calls,
+                "recordings_per_bird_median": float(per_bird.median()),
+                "p_leak": 1.0 - 1.0 / mean_calls if mean_calls > 0 else float("nan"),
             }
         )
-
-    if not rows:
-        return rows, None
-
-    frame = pd.DataFrame(rows)
-    zero = frame[frame.zero_exposure_to_both_species]
-    other = frame[~frame.zero_exposure_to_both_species]
-
-    if zero.empty or other.empty:
-        return frame.to_dict("records"), None
-
-    summary = {
-        "zero_exposure_models": ", ".join(zero.model),
-        "zero_exposure_ratio_min": float(zero.species_ratio.min()),
-        "zero_exposure_ratio_max": float(zero.species_ratio.max()),
-        "other_models_ratio_min": float(other.species_ratio.min()),
-        "other_models_ratio_max": float(other.species_ratio.max()),
-        "other_models_ratio_mean": float(other.species_ratio.mean()),
-    }
-    return frame.to_dict("records"), summary
+    return rows
 
 
 # =============================================================================
 # Entry point
 # =============================================================================
-
-def species_scores():
-    """Return {model: {species: (accuracy, chance)}} from the stage 3 results.
-
-    Diagnostic 4 needs every model, not just the five the other diagnostics use,
-    so it reads the results table rather than recomputing.
-    """
-    scores = {}
-    for species in CONFIG["species"]:
-        path = ROOT / "results" / species / "rows.csv"
-        if not path.exists():
-            continue
-        table = pd.read_csv(path)
-        table = table[table.call_set == "single"]
-        # For ag use the lab subset, which is the confound-free one.
-        subset = "lab" if species == "ag" and "lab" in set(table.subset) else "all"
-        table = table[table.subset == subset]
-        for _, row in table.iterrows():
-            scores.setdefault(row["model"], {})[species] = (
-                float(row["accuracy_byrec"]),
-                float(row["chance_inverse_n_birds"]),
-            )
-    return scores
-
 
 def main():
     shift_rows, call_type_rows, kinship_rows = [], [], []
@@ -513,30 +482,24 @@ def main():
     pd.DataFrame(call_type_rows).to_csv(out_dir / "within_call_type.csv", index=False)
     pd.DataFrame(kinship_rows).to_csv(out_dir / "kinship.csv", index=False)
 
-    # Diagnostic 4. Needs the stage 3 results, so it is skipped when they are
-    # not present.
-    exposure_rows, exposure_summary = pretraining_exposure(species_scores())
-    if exposure_rows:
-        pd.DataFrame(exposure_rows).to_csv(out_dir / "pretraining_exposure.csv", index=False)
+    # Diagnostic 4. Metadata only, so it always runs.
+    structure_rows = []
+    for species in CONFIG["species"]:
+        structure_rows += split_structure(species)
+    pd.DataFrame(structure_rows).to_csv(out_dir / "split_structure.csv", index=False)
 
     print()
     print(f"Wrote {out_dir}")
     print(f"  domain_shift.csv     {len(shift_rows)} rows")
     print(f"  within_call_type.csv {len(call_type_rows)} rows")
     print(f"  kinship.csv          {len(kinship_rows)} rows")
-    if exposure_rows:
-        print(f"  pretraining_exposure.csv {len(exposure_rows)} rows")
-    if exposure_summary:
-        print()
-        print("Pretraining exposure control (aa/ag ratio, accuracy over chance):")
-        print(f"  zero exposure to both species ({exposure_summary['zero_exposure_models']}): "
-              f"{exposure_summary['zero_exposure_ratio_min']:.2f} to "
-              f"{exposure_summary['zero_exposure_ratio_max']:.2f}")
-        print(f"  every other model: "
-              f"{exposure_summary['other_models_ratio_min']:.2f} to "
-              f"{exposure_summary['other_models_ratio_max']:.2f} "
-              f"(mean {exposure_summary['other_models_ratio_mean']:.2f})")
-        print("  The difference appears at full strength with zero exposure.")
+    print(f"  split_structure.csv      {len(structure_rows)} rows")
+    print()
+    print("Split structure (how much a random split can inflate a result):")
+    for row in structure_rows:
+        print(f"  {row['species']}/{row['subset']:4} "
+              f"{row['calls_per_recording_mean']:5.1f} calls per recording, "
+              f"p_leak = {row['p_leak']:.2f}")
 
     if shift_rows:
         summary = pd.DataFrame(shift_rows).groupby(["species", "model"])["lift_over_chance"].mean()
