@@ -25,7 +25,8 @@ conda activate parrot-id
 ./run_all.sh analyse
 ```
 
-The run takes about 3 hours on 8 CPU cores. The outputs go to `results/`.
+The outputs go to `results/`. Each stage prints its duration when it finishes, and the run
+ends with a table of all of them.
 
 To reproduce the pipeline from the raw audio instead, run `./run_all.sh all`. This path
 extracts the embeddings first and needs a GPU. See Section 4.
@@ -34,7 +35,9 @@ extracts the embeddings first and needs a GPU. See Section 4.
 
 ## 2. Terms
 
-This document uses each term below with one meaning only.
+Every term used in this repository has one meaning, and that meaning is in
+`docs/GLOSSARY.md`. The code, the documentation and the manuscript use the same word for the
+same thing. The most important ones are below.
 
 | Term | Meaning |
 |---|---|
@@ -48,6 +51,10 @@ This document uses each term below with one meaning only.
 | **embedding** | The output vector of a model for one clip. |
 | **head** | The small metric-learning network that is trained on top of frozen embeddings. |
 | **EER** | Equal error rate. The verification metric. Lower is better. Chance is 0.5. |
+| **leakage delta** | The random split accuracy minus the by-recording accuracy. |
+
+The rules that govern how this repository is written are in `docs/WRITING_STANDARD.md`.
+`tests/test_writing.py` enforces them.
 
 ---
 
@@ -55,14 +62,14 @@ This document uses each term below with one meaning only.
 
 The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
 
-| Stage | Script | Output | Hardware | Time |
-|---|---|---|---|---|
-| 0 | `00_build_master_metadata.py` | `data/<sp>/metadata/<sp>_master.csv` | CPU | 1 min |
-| 1 | `01_extract_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU | 4 to 8 h |
-| 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU | 1 min |
-| 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU | 1 to 2 h |
-| 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU | 3 to 6 h |
-| 5 | `05_diagnostics.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/diagnostics/` | CPU | 20 min |
+| Stage | Script | Output | Hardware |
+|---|---|---|---|
+| 0 | `00_build_master_metadata.py` | `data/<sp>/metadata/<sp>_master.csv` | CPU |
+| 1 | `01_extract_embeddings.py`, `01b_verify_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU |
+| 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU |
+| 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU |
+| 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU |
+| 5 | `05_diagnostics.py`, `06_leakage_experiment.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/diagnostics/` | CPU |
 
 Stage 0 builds the master metadata table. This table is the single source of truth for the
 bird identity and the `recording_id` of every clip. Every later stage reads it.
@@ -107,6 +114,9 @@ macaw-individual-id/
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
 ├── environment.lock/             The recorded package and weight checksums.
+├── docs/
+│   ├── GLOSSARY.md               One meaning for every term.
+│   └── WRITING_STANDARD.md       How this repository is written.
 ├── src/
 │   ├── 00_build_master_metadata.py
 │   ├── 01_extract_embeddings.py
@@ -115,11 +125,13 @@ macaw-individual-id/
 │   ├── 03_classify.py
 │   ├── 04_metric_learning.py
 │   ├── 05_diagnostics.py
+│   ├── 06_leakage_experiment.py
 │   ├── 07_manifest.py
 │   ├── 08_freeze_environment.py
 │   └── 09_supplementary_bouts.py
 ├── tests/
-│   └── test_splits.py            Asserts that the split does not leak.
+│   ├── test_splits.py            Asserts that the split does not leak.
+│   └── test_writing.py           Asserts the writing standard.
 ├── data/<sp>/metadata/           The master tables. Tracked here.
 └── results/                      All outputs. Regenerated, never edited by hand.
 ```
@@ -238,6 +250,9 @@ pytest tests/
 `tests/test_splits.py` asserts that no `recording_id` appears in both the train set and the
 test set, for every species and every subset.
 
+`tests/test_writing.py` asserts that every comment, docstring and documentation file follows
+`docs/WRITING_STANDARD.md`.
+
 ---
 
 ## 8. Known issues
@@ -248,7 +263,7 @@ test set, for every species and every subset.
 detect CUDA. The shipped value is `cpu`.
 
 Caution: If you do not change this value, the torch models run on CPU on a GPU node. The run
-takes about 10 times longer and gives no error.
+is then much slower and gives no error.
 
 `run_all.sh` sets this value automatically and keeps a backup of the original file.
 
@@ -277,7 +292,9 @@ through the `CPU_ONLY_MODELS` list.
 Warning: Do not run `pip install -U jax[cuda12]`. The `-U` flag upgrades numpy to version 2,
 which breaks the pinned torch and bacpipe environment.
 
-To repair a broken environment, run `pip install -r requirements.lock.txt`.
+To repair a broken environment, delete it and rebuild it from `environment.yml`. Then run
+`python src/08_freeze_environment.py verify` to confirm that the rebuilt environment matches
+`environment.lock/`.
 
 ### 8.5 Stage 4 writes only at the end of a subset
 
@@ -291,7 +308,7 @@ appends its results for each model and skips completed work when you rerun it.
 
 ## 9. Data
 
-The audio and the embeddings are archived separately. See `docs/METHODS.md` for the DOI.
+The audio and the embeddings are archived separately.
 
 The dataset follows the metadata framework of Knight et al. (2024).
 
@@ -300,8 +317,3 @@ The dataset follows the metadata framework of Knight et al. (2024).
 - Temporal extent: multiple recordings within one season.
 - Annotation: call level.
 
----
-
-## 10. Citation
-
-See `CITATION.cff`.

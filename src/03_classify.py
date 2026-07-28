@@ -21,9 +21,6 @@ OUTPUT
     results/<species>/rows.csv    One row for each model, subset, and call set.
     results/<species>/preds.csv   One row for each scored window.
 
-RUNTIME
-    About 1 to 2 hours for each species on 8 CPU cores. No GPU is needed.
-
 RESUMING
     The script appends one row for each model and skips completed work. To
     rescore one model, delete its row from results/<species>/rows.csv and run
@@ -544,8 +541,8 @@ def score_model(frame, species, subset, call_set, model):
 
         # --- MAIN TEXT metric 3 of 4: verification AUC ------------------------
         # Comparable to Stowell et al. (2019) and Huang et al. (2025), who both
-        # report AU-ROC. EER is kept below for the supplement; the two rank the
-        # models almost identically (Spearman 0.98).
+        # report AU-ROC. EER is kept below for the supplement. The two rank
+        # the models almost identically (Spearman 0.98).
         "verification_auc": auc,
 
         # --- MAIN TEXT metric 4 of 4: encounter accuracy ----------------------

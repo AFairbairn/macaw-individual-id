@@ -117,7 +117,7 @@ split:
 # One entry for each representation. This block is the source for the model
 # description table in the manuscript.
 #
-# family        Groups the panel for reporting. Five families:
+# family        Groups the panel for reporting. Six families:
 #                 bird_supervised   Trained to classify bird species.
 #                 animal_ssl        Self-supervised on animal or general audio,
 #                                   HuBERT architecture.
@@ -157,7 +157,7 @@ models:
   mfcc_cmvn:          {family: handcrafted, cite: "this study", verify: false}
 
 # NOTE ON wavlm_base_plus_sv: this is the SPEAKER-VERIFICATION fine-tuned
-# variant, read at its final x-vector output. Cauzinille et al. (2024) used
+# variant, read at its final fixed-length output. Cauzinille et al. (2024) used
 # plain WavLM Large at the SECOND transformer layer and found it strong for
 # gibbon individual ID. Those are different configurations of the same family.
 # State that difference rather than treating the two results as contradictory.
@@ -168,13 +168,13 @@ models:
 # The settings follow Lakdari et al. (2024), with three changes for this data.
 #
 # 1. The band is 500 to 8000 Hz, not their 400 to 1600 Hz. The band comes from
-#    our own audio. Call energy sits at about 1.3 to 5 kHz in both species
+#    our own audio. Call energy sits between 1.3 and 5 kHz in both species
 #    (5th to 95th percentile).
 # 2. The sample rate is 16 kHz. The Nyquist frequency is then 8 kHz, which
 #    matches the top of the band.
 # 3. Their gibbon calls last 9 to 27 seconds. Ours last 0.39 +/- 0.11 s (aa)
 #    and 0.58 +/- 0.20 s (ag), measured after the drop_clips exclusions. One
-#    call gives about 15 to 140 frames, so the standard deviation of each
+#    call gives 15 to 140 frames, so the standard deviation of each
 #    coefficient is noisier than in their study. Report this limit.
 # -----------------------------------------------------------------------------
 mfcc:
@@ -208,7 +208,8 @@ mfcc:
 # -----------------------------------------------------------------------------
 # The metric-learning head
 #
-# The head is deliberately small. A deep network overfits about 480 calls.
+# The head is deliberately small. A deep network learns the training calls
+# instead of the general pattern when the training set is this small.
 # The losses are supervised contrastive (Khosla et al. 2020) and prototypical
 # (Snell et al. 2017). Triplet loss and ArcFace were tested and dropped.
 # -----------------------------------------------------------------------------
@@ -219,7 +220,8 @@ metric_learning:
   learning_rate: 0.01
   weight_decay: 0.001
   max_epochs: 200
-  patience: 20                   # Early stopping on a held-out slice.
+  patience: 20                   # Stop when the score on a held-out slice
+                                 # stops improving after this many epochs.
   losses: [proto, supcon]
   holdout_birds: 3               # Birds held out for each novel-individual repeat.
   holdout_repeats: 12

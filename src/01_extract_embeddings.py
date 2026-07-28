@@ -16,9 +16,6 @@ OUTPUT
     bacpipe_results/<species>/embeddings/<stamp>___<model>-<species>/.../
         One .npy file for each call and each model.
 
-RUNTIME
-    About 4 to 8 hours for each species on a GPU. About one day on CPU.
-
 RESUMING
     A model that already wrote one .npy file for every call is skipped. To
     recompute one model, delete its output directory and run the script again.
@@ -40,8 +37,8 @@ HARDWARE
 CAUTION
     bacpipe reads its device from settings.yaml inside the installed package. It
     does not detect CUDA. The shipped value is 'cpu'. If you do not change that
-    value, the torch models run on CPU on a GPU node. The run takes about 10
-    times longer and gives no error message. This script rewrites the value
+    value, the torch models run on CPU on a GPU node. The run is then much
+    slower and gives no error message. This script rewrites the value
     before each model, so a reinstall of bacpipe cannot strand the run on CPU.
 
 CAUTION

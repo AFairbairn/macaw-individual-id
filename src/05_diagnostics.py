@@ -3,7 +3,7 @@
 05_diagnostics.py
 
 PURPOSE
-    Run three diagnostics that test what the embeddings actually encode. Each
+    Run four diagnostics that test what the embeddings actually encode. Each
     one answers a question that a referee will ask about the main results.
 
 USAGE
@@ -19,15 +19,13 @@ OUTPUT
     results/diagnostics/domain_shift.csv        One row for each bird and model.
     results/diagnostics/within_call_type.csv    One row for each call type.
     results/diagnostics/kinship.csv             One row for each model.
-
-RUNTIME
-    About 15 minutes on 8 CPU cores. No GPU is needed.
+    results/diagnostics/split_structure.csv     One row for each species and
+                                                subset.
 
 NOTE
-    This script writes CSV files only. It draws no figures. Figures are made
-    separately from these files.
+    This script writes CSV files. Figures are made separately from them.
 
-THE THREE DIAGNOSTICS
+THE FOUR DIAGNOSTICS
 
     1. Domain shift
        Question: do recordings carry an acoustic signature that a model could

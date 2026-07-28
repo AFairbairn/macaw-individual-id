@@ -19,9 +19,6 @@ INPUT
 OUTPUT
     results/supplementary/bout_comparison.csv
 
-RUNTIME
-    About 20 minutes on 8 CPU cores. No GPU is needed.
-
 THE QUESTION
     A single call is one vocalisation. A bout is a run of several calls. A bout
     therefore gives a model more acoustic material.

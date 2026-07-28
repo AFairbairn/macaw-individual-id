@@ -59,6 +59,28 @@ say() { printf '\n\033[1m[%s] %s\033[0m\n' "$(date +%H:%M:%S)" "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # -----------------------------------------------------------------------------
+# Stage timing.
+#
+# begin_stage prints the banner and starts the clock. end_stage prints how long
+# the stage took and adds it to TIMINGS, which the summary at the end prints as
+# a table. Use those durations to plan the next run.
+# -----------------------------------------------------------------------------
+STAGE_START=0
+STAGE_NAME=""
+TIMINGS=()
+
+# hms: turn a number of seconds into hh:mm:ss.
+hms() { printf '%02d:%02d:%02d' $(($1 / 3600)) $(($1 % 3600 / 60)) $(($1 % 60)); }
+
+begin_stage() { STAGE_NAME="$1"; STAGE_START=$SECONDS; say "$1"; }
+
+end_stage() {
+  local seconds=$((SECONDS - STAGE_START))
+  TIMINGS+=("$(printf '%-46s %s' "$STAGE_NAME" "$(hms "$seconds")")")
+  printf '\033[1m         %s took %s\033[0m\n' "$STAGE_NAME" "$(hms "$seconds")"
+}
+
+# -----------------------------------------------------------------------------
 # detect_device
 #
 # Return 'cuda' if a CUDA device is available. If no CUDA device is available,
@@ -83,8 +105,8 @@ detect_device() {
 #
 # CAUTION: bacpipe reads its device from this file. It does not detect CUDA.
 # The shipped value is 'cpu'. If you do not change this value, the torch models
-# run on CPU on a GPU node. The run takes about 10 times longer and gives no
-# error message.
+# run on CPU on a GPU node. The run is then much slower and gives no error
+# message.
 #
 # The function keeps a backup of the original file.
 # -----------------------------------------------------------------------------
@@ -189,7 +211,7 @@ if [[ "$STAGE" == "auto" ]]; then
 fi
 
 # =============================================================================
-say "STAGE 0 of 5   Master metadata"
+begin_stage "STAGE 0 of 5   Master metadata"
 # =============================================================================
 # The master table is the single source of truth for the bird identity and the
 # recording_id of every clip. Every later stage reads it. Build it first.
@@ -199,10 +221,11 @@ for sp in aa ag; do
   [[ -f "data/${sp}/metadata/${sp}_master.csv" ]] \
     || die "Missing data/${sp}/metadata/${sp}_master.csv"
 done
+end_stage
 
 # =============================================================================
 if [[ "$STAGE" == "all" || "$STAGE" == "embed" ]]; then
-  say "STAGE 1 of 5   Embedding extraction   [GPU, 4 to 8 hours, resumable]"
+  begin_stage "STAGE 1 of 5   Embedding extraction   [GPU, resumable]"
 # =============================================================================
   set_bacpipe_device "$DEVICE"
 
@@ -214,6 +237,7 @@ if [[ "$STAGE" == "all" || "$STAGE" == "embed" ]]; then
   # Those messages come from a dashboard step that this pipeline does not use.
   # Do not use the absence of tracebacks to confirm success. Count the files.
   python src/01b_verify_embeddings.py || die "The embedding count check failed."
+  end_stage
 else
   say "STAGE 1 of 5   Skipped. Using existing embeddings."
 fi
@@ -224,23 +248,25 @@ if [[ "$STAGE" == "embed" ]]; then
 fi
 
 # =============================================================================
-say "STAGE 2 of 5   MFCC baseline   [CPU, 1 minute]"
+begin_stage "STAGE 2 of 5   MFCC baseline   [CPU]"
 # =============================================================================
 # The MFCC baseline is the classical floor for the benchmark. It writes its
 # features in the bacpipe layout, so stage 3 treats it as three more models.
 python src/02_extract_mfcc.py
+end_stage
 
 # =============================================================================
-say "STAGE 3 of 5   Classification, verification, clustering   [CPU, 1 to 2 hours]"
+begin_stage "STAGE 3 of 5   Classification, verification, clustering   [CPU]"
 # =============================================================================
 # This stage appends one row for each model and skips completed work. To rerun
 # one model, delete its row from results/<species>/rows.csv.
 for sp in aa ag; do
   python src/03_classify.py --species "$sp"
 done
+end_stage
 
 # =============================================================================
-say "STAGE 4 of 5   Metric learning   [CPU bound, 3 to 6 hours]"
+begin_stage "STAGE 4 of 5   Metric learning   [CPU bound]"
 # =============================================================================
 # CAUTION: This stage writes its results when a subset finishes. If the process
 # stops in the middle of a subset, the work for that subset is lost. Run this
@@ -249,12 +275,13 @@ for sp in aa ag; do
   python src/04_metric_learning.py \
     --species "$sp" --set single --device "$DEVICE" --dump-embeddings
 done
+end_stage
 
 # =============================================================================
-say "STAGE 5 of 5   Diagnostics and manifest   [CPU, 20 minutes]"
+begin_stage "STAGE 5 of 5   Diagnostics and manifest   [CPU]"
 # =============================================================================
-# Domain shift, within call type, and kinship. These are result tables, not
-# figures. This pipeline produces data only. Figures are made separately.
+# Domain shift, within call type, kinship, and split structure. Figures are made
+# separately from these tables.
 python src/05_diagnostics.py
 
 # The leakage experiment. Demonstrates the mechanism within one species, with
@@ -267,11 +294,16 @@ python src/09_supplementary_bouts.py
 
 # An md5 checksum for every output, so a rerun can be diffed.
 python src/07_manifest.py
+end_stage
 
 say "COMPLETE"
-echo "  results/                All tables and figures."
+echo "  results/                Every result table."
 echo "  results/MANIFEST.csv    An md5 checksum for every output."
 echo "  ${LOG}                  The log of this run."
+echo
+echo "Duration of each stage:"
+for line in "${TIMINGS[@]}"; do echo "  ${line}"; done
+echo "  $(printf '%-46s %s' 'TOTAL' "$(hms "$SECONDS")")"
 echo
 echo "To confirm that a rerun gives the same results, compare the manifests:"
 echo "  diff <(sort results/MANIFEST.csv) <(sort results_previous/MANIFEST.csv)"

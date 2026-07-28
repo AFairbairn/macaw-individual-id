@@ -11,6 +11,12 @@ USAGE
     python src/00_build_master_metadata.py            Validate the table.
     python src/00_build_master_metadata.py --rebuild  Rebuild it from source.
 
+INPUT
+    data/<species>/metadata/<species>_master.csv
+        The published master table. Validate mode reads this file.
+    The original field and colony records.
+        Rebuild mode reads these instead. They are not published. See below.
+
 OUTPUT
     data/<species>/metadata/<species>_master.csv
 
@@ -89,7 +95,7 @@ REQUIRED_COLUMNS = [
 #
 # Two files were removed as segmentation errors and are absent from the dataset:
 # acorn_upstaris_240517_0777 (aa, 111 s, a bout) and john_241004_doublese_01
-# (ag, 19.1 s). The pipeline filters no clip; bad data was removed at source.
+# (ag, 19.1 s). The pipeline filters no clip. Bad data was removed at source.
 EXPECTED = {
     "aa": {"clips": 480, "single": 480, "birds": 8, "recordings": 211},
     "ag": {"clips": 1060, "single": 1060, "birds": 16, "recordings": 74},

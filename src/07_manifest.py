@@ -9,6 +9,11 @@ PURPOSE
 USAGE
     python src/07_manifest.py
 
+INPUT
+    results/
+        Every file below this directory, except the manifest itself and the
+        log files.
+
 OUTPUT
     results/MANIFEST.csv
         One row for each output file, with these columns:

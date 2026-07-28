@@ -29,9 +29,6 @@ OUTPUT
     mfcc_results/<species>/embeddings/<stamp>___<variant>-<species>/single/
         One .npy file for each clip. The file holds one row.
 
-RUNTIME
-    About 15 seconds for 1,541 clips on one CPU core. No GPU is needed.
-
 THE THREE VARIANTS
     mfcc_lakdari
         The formula of Lakdari et al. (2024). 12 coefficients. The mean and the
@@ -53,7 +50,7 @@ CAUTION
 
 DEPARTURES FROM THE GIBBON PAPER
     1. The band is 500 to 8000 Hz. Their band is 400 to 1600 Hz. Our band comes
-       from our own audio. Call energy sits at about 1.3 to 5 kHz in both
+       from our own audio. Call energy sits between 1.3 and 5 kHz in both
        species, measured as the 5th to 95th percentile of spectral energy.
     2. The sample rate is 16 kHz. The Nyquist frequency is then 8 kHz, which
        matches the top of the band.

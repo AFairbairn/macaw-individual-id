@@ -26,10 +26,6 @@ OUTPUT
     results/<species>/<subset>/metric_learning/head_embeddings.csv
         The vectors in the learned space. Written with --dump-embeddings.
 
-RUNTIME
-    About 3 to 6 hours for each species. A GPU gives only a small gain, because
-    the head is tiny and the time goes on scikit-learn and on Python overhead.
-
 CAUTION
     This script writes its results when a subset finishes. If the process stops
     in the middle of a subset, the work for that subset is lost. Run the script
@@ -54,7 +50,8 @@ THE DESIGN
 
         StandardScaler -> optional PCA -> Linear(in_dim, projection_dim) -> L2
 
-    The head is deliberately small. A deep network overfits about 480 calls. An
+    The head is deliberately small. A deep network learns the training calls
+    instead of the general pattern when the training set is this small. An
     earlier attempt with a deeper ArcFace head did exactly that.
 
     Two losses are compared.
@@ -269,16 +266,18 @@ def proto_loss(z, y, classes, temperature=TEMPERATURE, generator=None):
     )
 
     query = ~support
-    logits = (z[query] @ prototypes.T) / temperature
+    # The raw score of each query call against each bird prototype. The
+    # temperature sets how sharply the loss separates the birds.
+    scores = (z[query] @ prototypes.T) / temperature
     position = {int(bird): i for i, bird in enumerate(classes)}
     target = torch.tensor([position[int(v)] for v in y[query]], device=z.device)
-    return F.cross_entropy(logits, target)
+    return F.cross_entropy(scores, target)
 
 
 def train_head(features, labels, loss_kind, classes):
     """Train one head and return it.
 
-    Training stops early when the loss on a held-out slice stops improving. The
+    Training stops when the loss on a held-out slice stops improving. The
     slice never takes a whole class, so every bird stays in the training set.
     """
     generator_numpy = np.random.default_rng(SEED)

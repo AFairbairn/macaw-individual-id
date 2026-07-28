@@ -28,6 +28,11 @@ USAGE
     Check the record, and stop the pipeline if anything differs:
         python src/08_freeze_environment.py verify --strict
 
+INPUT
+    The installed Python packages of the active environment.
+    The downloaded model weight files of bacpipe.
+    environment.lock/    Verify mode reads the recorded values from here.
+
 OUTPUT
     environment.lock/packages.txt      Every installed package and its version.
     environment.lock/model_weights.csv An md5 checksum for every weight file.
