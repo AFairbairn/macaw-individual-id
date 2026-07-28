@@ -78,7 +78,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yaml
-from sklearn.cluster import AffinityPropagation, KMeans
+from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -101,13 +101,6 @@ DROP_CLIPS = set(CONFIG["drop_clips"])
 
 # The dataset can live outside the repository. run_all.sh sets PARROT_DATA.
 DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
-
-try:
-    import hdbscan as hdbscan_module
-    HAVE_HDBSCAN = True
-except ImportError:
-    HAVE_HDBSCAN = False
-
 
 # =============================================================================
 # Loading
@@ -423,52 +416,35 @@ def run_verification(features, labels, groups):
 def run_clustering(features, labels):
     """Cluster the embeddings and score the clusters against the bird identity.
 
-    Three algorithms run. KMeans receives the true number of birds. Affinity
-    propagation and HDBSCAN infer the number of clusters, so they match the
-    open-set case, where the number of individuals is unknown.
+    One algorithm runs: KMeans, given the true number of birds. Three metrics
+    are reported. ARI is the primary one, because it is corrected for chance.
+    NMI is reported for comparison with Lakdari et al. (2024), who use it.
 
     CAUTION: Do not report NMI on its own. NMI increases as the number of
-    clusters increases. Affinity propagation infers many more clusters than
-    there are birds, so its NMI is higher than the NMI of KMeans while its ARI
-    is lower. Read NMI next to AMI, ARI, and the inferred cluster count.
+    clusters increases, so it favours any method that produces many clusters.
+    Read it next to ARI.
+
+    NOTE ON THE LIMITATION: This function clusters every call at once. There is
+    no train and test split, because clustering needs no training. That matches
+    how the field reports clustering, but it means a cluster can form around a
+    recording instead of a bird. Read these numbers together with the
+    domain-shift diagnostic in 05_diagnostics.py, which measures how strong the
+    per-recording signature is.
+
+    Affinity propagation and HDBSCAN were tested and removed. Affinity
+    propagation inferred 37 to 85 clusters for 8 to 16 birds, and HDBSCAN
+    labelled 36 to 100 percent of calls as noise. Neither recovered individual
+    identity, and reporting them added length without adding information.
     """
     vectors = normalize(features)
     n_birds = len(np.unique(labels))
-    settings = CONFIG["clustering"]
-    results = {}
+    assigned = KMeans(n_birds, random_state=SEED, n_init=10).fit_predict(vectors)
 
-    def score(prefix, assigned):
-        results[f"{prefix}_k"] = int(len(set(assigned[assigned >= 0])))
-        results[f"{prefix}_nmi"] = float(normalized_mutual_info_score(labels, assigned))
-        results[f"{prefix}_ami"] = float(adjusted_mutual_info_score(labels, assigned))
-        results[f"{prefix}_ari"] = float(adjusted_rand_score(labels, assigned))
-        results[f"{prefix}_purity"] = float(
-            pd.crosstab(assigned, labels).max(axis=1).sum() / len(labels)
-        )
-
-    score("kmeans", KMeans(n_birds, random_state=SEED, n_init=10).fit_predict(vectors))
-
-    affinity = settings["affinity_propagation"]
-    score(
-        "ap",
-        AffinityPropagation(
-            random_state=SEED,
-            damping=affinity["damping"],
-            max_iter=affinity["max_iter"],
-            convergence_iter=affinity["convergence_iter"],
-        ).fit_predict(vectors),
-    )
-
-    if HAVE_HDBSCAN:
-        assigned = hdbscan_module.HDBSCAN(
-            min_cluster_size=settings["hdbscan"]["min_cluster_size"]
-        ).fit_predict(vectors)
-        score("hdbscan", assigned)
-        # HDBSCAN labels an outlier as -1. A high noise fraction means the
-        # algorithm did not find structure, so read its scores with that number.
-        results["hdbscan_noise_fraction"] = float((assigned < 0).mean())
-
-    return results
+    return {
+        "cluster_ari": float(adjusted_rand_score(labels, assigned)),
+        "cluster_ami": float(adjusted_mutual_info_score(labels, assigned)),
+        "cluster_nmi": float(normalized_mutual_info_score(labels, assigned)),
+    }
 
 
 # =============================================================================
@@ -490,13 +466,24 @@ def score_model(frame, species, subset, call_set, model):
 
     n_birds = int(frame["bird"].nunique())
 
+    # Both splits are scored with clips, so the random split also yields a
+    # clip-level macro-F1. The primary metric is macro-F1, so its leakage delta
+    # needs both halves.
     probe_grouped = run_probe(features, labels, groups, "by_recording", clips=clips)
-    probe_random = run_probe(features, labels, groups, "random")
+    probe_random = run_probe(features, labels, groups, "random", clips=clips)
     centroid_grouped = run_centroid(features, labels, groups, "by_recording", clips=clips)
-    centroid_random = run_centroid(features, labels, groups, "random")
+    centroid_random = run_centroid(features, labels, groups, "random", clips=clips)
 
+    # The reported unit is the CLIP, that is one call. Most models return one
+    # window for each clip, so this changes nothing for them. Two models
+    # (aves_especies, birdaves_especies) return more than one window for a few
+    # clips. Fusing to the clip keeps every model on the same unit. The measured
+    # difference is at most 0.004 accuracy.
     probe_clip_accuracy, probe_clip_f1 = fuse_windows_to_clips(
         probe_grouped["y_true"], probe_grouped["y_pred"], probe_grouped["clip"]
+    )
+    probe_random_clip_accuracy, probe_random_clip_f1 = fuse_windows_to_clips(
+        probe_random["y_true"], probe_random["y_pred"], probe_random["clip"]
     )
     centroid_clip_accuracy, _ = fuse_windows_to_clips(
         centroid_grouped["y_true"], centroid_grouped["y_pred"], centroid_grouped["clip"]
@@ -512,39 +499,55 @@ def score_model(frame, species, subset, call_set, model):
     chance_majority = float(call_counts.max() / call_counts.sum())
 
     row = {
+        # --- identifiers -----------------------------------------------------
         "species": species,
         "subset": subset,
         "call_set": call_set,
         "model": model,
-        "n_windows": len(frame),
         "n_clips": int(frame["clip_id"].nunique()),
+        "n_windows": len(frame),
         "n_birds": n_birds,
         "n_recordings": int(frame["session"].nunique()),
         "dim": int(features.shape[1]),
-        # Baselines.
+
+        # --- baselines -------------------------------------------------------
+        # ag is unbalanced, so the majority-class rate is the honest baseline.
+        # aa is balanced, so the two values agree there.
         "chance_inverse_n_birds": chance_inverse,
         "chance_majority_class": chance_majority,
-        # Linear probe.
-        "probe_byrec_acc": probe_grouped["accuracy"],
-        "probe_byrec_sd": probe_grouped["sd"],
-        "probe_byrec_f1": probe_grouped["f1"],
-        "probe_byrec_acc_clip": probe_clip_accuracy,
-        "probe_byrec_f1_clip": probe_clip_f1,
-        "probe_random_acc": probe_random["accuracy"],
-        "probe_leakage_delta": probe_random["accuracy"] - probe_grouped["accuracy"],
-        "probe_lift_over_majority": probe_grouped["accuracy"] / chance_majority,
-        # Cosine nearest centroid.
-        "centroid_byrec_acc": centroid_grouped["accuracy"],
-        "centroid_byrec_sd": centroid_grouped["sd"],
-        "centroid_byrec_f1": centroid_grouped["f1"],
-        "centroid_byrec_acc_clip": centroid_clip_accuracy,
-        "centroid_random_acc": centroid_random["accuracy"],
-        "centroid_leakage_delta": centroid_random["accuracy"] - centroid_grouped["accuracy"],
-        # Encounter. See the note in the module docstring.
-        "encounter_byrec_acc": encounter_accuracy,
-        # Verification.
-        "auc": auc,
-        "eer": eer,
+
+        # --- MAIN TEXT metric 1 of 4: accuracy, both splits -------------------
+        # The unit is the clip, that is one call.
+        "accuracy_byrec": probe_clip_accuracy,
+        "accuracy_random": probe_random_clip_accuracy,
+        "accuracy_leakage_delta": probe_random_clip_accuracy - probe_clip_accuracy,
+        "accuracy_byrec_sd": probe_grouped["sd"],
+
+        # --- MAIN TEXT metric 2 of 4: macro-F1, both splits -------------------
+        # Macro-F1 is the PRIMARY metric, because it is not distorted by the ag
+        # class imbalance. Gallego et al. (2026) use it as primary for the same
+        # reason.
+        "macro_f1_byrec": probe_clip_f1,
+        "macro_f1_random": probe_random_clip_f1,
+        "macro_f1_leakage_delta": probe_random_clip_f1 - probe_clip_f1,
+
+        # --- MAIN TEXT metric 3 of 4: verification AUC ------------------------
+        # Comparable to Stowell et al. (2019) and Huang et al. (2025), who both
+        # report AU-ROC. EER is kept below for the supplement; the two rank the
+        # models almost identically (Spearman 0.98).
+        "verification_auc": auc,
+
+        # --- MAIN TEXT metric 4 of 4: encounter accuracy ----------------------
+        # The deployment unit. See the note in the module docstring.
+        "encounter_accuracy": encounter_accuracy,
+
+        # --- SUPPLEMENT ------------------------------------------------------
+        "verification_eer": eer,
+        "centroid_accuracy_byrec": centroid_grouped["accuracy"],
+        "centroid_accuracy_random": centroid_random["accuracy"],
+        "centroid_macro_f1_byrec": centroid_grouped["f1"],
+        # Window-level accuracy, kept so the clip-level fusion can be checked.
+        "accuracy_byrec_window_level": probe_grouped["accuracy"],
     }
     row.update(run_clustering(features, labels))
 
@@ -662,12 +665,13 @@ def main():
 
                 print(
                     f"  [{subset}/{call_set}] {model}: "
-                    f"probe {row['probe_byrec_acc']:.3f} "
-                    f"(random {row['probe_random_acc']:.3f}, "
+                    f"F1 {row['macro_f1_byrec']:.3f} "
+                    f"acc {row['accuracy_byrec']:.3f} "
+                    f"(random {row['accuracy_random']:.3f}, "
+                    f"delta {row['accuracy_leakage_delta']:+.3f}, "
                     f"majority {row['chance_majority_class']:.3f}) "
-                    f"centroid {row['centroid_byrec_acc']:.3f} "
-                    f"encounter {row['encounter_byrec_acc']:.3f} "
-                    f"eer {row['eer']:.3f}",
+                    f"auc {row['verification_auc']:.3f} "
+                    f"encounter {row['encounter_accuracy']:.3f}",
                     flush=True,
                 )
 

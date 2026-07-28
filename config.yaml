@@ -98,12 +98,22 @@ split:
 # -----------------------------------------------------------------------------
 # Excluded clips
 #
-# acorn_upstaris_240517_0777 is one continuous recording of about 111 seconds.
-# It gives 109 windows for a 1-second model. It is not a normal call bout, and
-# it would dominate the short-window set.
+# Each entry is a segmentation error: a file that holds far more than one call.
+# Give the reason and the evidence for every clip listed here.
 # -----------------------------------------------------------------------------
 drop_clips:
+  # aa. One continuous recording of about 111 s. It gives 109 windows for a 1 s
+  # model. It is not a normal call bout and it would dominate the short-window
+  # set.
   - acorn_upstaris_240517_0777
+  # ag. 19.1 s, labelled as one 'doublese' call. That is 21 times the median
+  # doublese (0.94 s) and 13 times the next longest clip in the whole ag set
+  # (1.44 s), so it is a segmentation error, not a call. Its recording could not
+  # be resolved (session_known = 0), so it was already excluded from every
+  # session-aware score. It is listed here as well, so that it is also excluded
+  # from the reported duration statistics and from any future random-split
+  # analysis.
+  - john_241004_doublese_01
 
 # -----------------------------------------------------------------------------
 # The MFCC baseline
@@ -115,9 +125,10 @@ drop_clips:
 #    (5th to 95th percentile).
 # 2. The sample rate is 16 kHz. The Nyquist frequency is then 8 kHz, which
 #    matches the top of the band.
-# 3. Their gibbon calls last 9 to 27 seconds. Our calls last 0.19 to 1.28
-#    seconds. One call gives 17 to 125 frames, so the standard deviation of
-#    each coefficient is noisier than in their study. Report this limit.
+# 3. Their gibbon calls last 9 to 27 seconds. Ours last 0.39 +/- 0.11 s (aa)
+#    and 0.58 +/- 0.20 s (ag), measured after the drop_clips exclusions. One
+#    call gives about 15 to 140 frames, so the standard deviation of each
+#    coefficient is noisier than in their study. Report this limit.
 # -----------------------------------------------------------------------------
 mfcc:
   sample_rate: 16000
