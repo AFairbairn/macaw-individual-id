@@ -114,9 +114,8 @@ split:
 # -----------------------------------------------------------------------------
 # The model panel
 #
-# One entry for each representation. This block has two jobs: it is the source
-# for the model description table in the manuscript, and it drives the
-# pretraining-exposure control in 05_diagnostics.py.
+# One entry for each representation. This block is the source for the model
+# description table in the manuscript.
 #
 # family        Groups the panel for reporting. Five families:
 #                 bird_supervised   Trained to classify bird species.
@@ -126,34 +125,36 @@ split:
 #                 audio_text        Contrastive audio-text.
 #                 speech_speaker    Human-speech speaker verification.
 #                 handcrafted       The MFCC baseline.
-# xeno_canto    true if the training corpus includes Xeno-canto, which holds
-#               recordings of both our study species. This drives the exposure
-#               control. Both macaws are rare on Xeno-canto (48 recordings for
-#               A. ambiguus, 17 for A. glaucogularis, checked 2026-07-28), so
-#               exposure is low for both, but it is not equal.
 # verify        true where the training corpus needs confirming from the primary
 #               source before the manuscript states it. DO NOT publish a
 #               training-corpus claim still marked verify: true.
+#
+# NOTE: an earlier version carried a xeno_canto flag for every model, to drive a
+# pretraining-exposure control. It was removed. The control's validity depended
+# on correctly classifying the training corpus of all 15 models, which is hard
+# to establish and easy to get wrong, and the result was negative anyway. The
+# control now uses only the two speech models, whose corpus is beyond doubt.
+# See src/05_diagnostics.py, diagnostic 4.
 # -----------------------------------------------------------------------------
 models:
-  birdnet:            {family: bird_supervised, xeno_canto: true,  cite: "Kahl et al. 2021", verify: false}
-  perch_bird:         {family: bird_supervised, xeno_canto: true,  cite: "Google Perch 2023", verify: true}
-  perch_v2:           {family: bird_supervised, xeno_canto: true,  cite: "Google Perch v2",   verify: true}
-  surfperch:          {family: bird_supervised, xeno_canto: true,  cite: "Williams et al. 2024", verify: true}
-  convnext_birdset:   {family: bird_supervised, xeno_canto: true,  cite: "Rauch et al. 2024 (BirdSet)", verify: true}
-  audioprotopnet:     {family: bird_supervised, xeno_canto: true,  cite: "BirdSet AudioProtoPNet", verify: true}
-  avesecho_passt:     {family: bird_supervised, xeno_canto: true,  cite: "AvesEcho PaSST", verify: true}
-  birdmae:            {family: bird_supervised, xeno_canto: true,  cite: "Bird-MAE", verify: true}
-  birdaves_especies:  {family: animal_ssl,      xeno_canto: true,  cite: "Hagiwara 2023; BirdAVES 2024", verify: false}
-  aves_especies:      {family: animal_ssl,      xeno_canto: false, cite: "Hagiwara 2023 (AVES)", verify: false}
-  beats:              {family: audio_ssl,       xeno_canto: false, cite: "Chen et al. 2023 (BEATs)", verify: true}
-  audiomae:           {family: audio_ssl,       xeno_canto: false, cite: "Huang et al. 2022 (AudioMAE)", verify: true}
-  biolingual:         {family: audio_text,      xeno_canto: true,  cite: "Robinson et al. 2024 (BioLingual)", verify: true}
-  ecapa_tdnn:         {family: speech_speaker,  xeno_canto: false, cite: "Desplanques et al. 2020", verify: false}
-  wavlm_base_plus_sv: {family: speech_speaker,  xeno_canto: false, cite: "Chen et al. 2022 (WavLM)", verify: false}
-  mfcc_lakdari:       {family: handcrafted,     xeno_canto: false, cite: "Lakdari et al. 2024", verify: false}
-  mfcc_full:          {family: handcrafted,     xeno_canto: false, cite: "this study", verify: false}
-  mfcc_cmvn:          {family: handcrafted,     xeno_canto: false, cite: "this study", verify: false}
+  birdnet:            {family: bird_supervised, cite: "Kahl et al. 2021", verify: false}
+  perch_bird:         {family: bird_supervised, cite: "Google Perch 2023", verify: true}
+  perch_v2:           {family: bird_supervised, cite: "Google Perch v2",   verify: true}
+  surfperch:          {family: bird_supervised, cite: "Williams et al. 2024", verify: true}
+  convnext_birdset:   {family: bird_supervised, cite: "Rauch et al. 2024 (BirdSet)", verify: true}
+  audioprotopnet:     {family: bird_supervised, cite: "BirdSet AudioProtoPNet", verify: true}
+  avesecho_passt:     {family: bird_supervised, cite: "AvesEcho PaSST", verify: true}
+  birdmae:            {family: bird_supervised, cite: "Bird-MAE", verify: true}
+  birdaves_especies:  {family: animal_ssl, cite: "Hagiwara 2023; BirdAVES 2024", verify: false}
+  aves_especies:      {family: animal_ssl, cite: "Hagiwara 2023 (AVES)", verify: false}
+  beats:              {family: audio_ssl, cite: "Chen et al. 2023 (BEATs)", verify: true}
+  audiomae:           {family: audio_ssl, cite: "Huang et al. 2022 (AudioMAE)", verify: true}
+  biolingual:         {family: audio_text, cite: "Robinson et al. 2024 (BioLingual)", verify: true}
+  ecapa_tdnn:         {family: speech_speaker, cite: "Desplanques et al. 2020", verify: false}
+  wavlm_base_plus_sv: {family: speech_speaker, cite: "Chen et al. 2022 (WavLM)", verify: false}
+  mfcc_lakdari:       {family: handcrafted, cite: "Lakdari et al. 2024", verify: false}
+  mfcc_full:          {family: handcrafted, cite: "this study", verify: false}
+  mfcc_cmvn:          {family: handcrafted, cite: "this study", verify: false}
 
 # NOTE ON wavlm_base_plus_sv: this is the SPEAKER-VERIFICATION fine-tuned
 # variant, read at its final x-vector output. Cauzinille et al. (2024) used

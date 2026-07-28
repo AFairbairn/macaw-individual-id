@@ -73,25 +73,35 @@ THE THREE DIAGNOSTICS
        out a large kinship effect, not a small one. State that limit.
 
     4. Pretraining exposure
-       Question: is Ara ambiguus easier than Ara glaucogularis only because the
-       models saw more of it during pretraining?
+       Question: do the two species differ only because the models saw more of
+       one than the other during pretraining?
 
-       This matters. Xeno-canto holds 48 recordings of A. ambiguus and 17 of
-       A. glaucogularis (checked 2026-07-28), and Xeno-canto is the training
-       corpus for the bird-supervised models. So exposure differs in the same
-       direction as the result. Huang et al. (2024) raise the same concern for
-       their own species.
+       This is worth asking. Xeno-canto holds 48 recordings of A. ambiguus and
+       17 of A. glaucogularis (checked 2026-07-28), and Xeno-canto trains the
+       bird models. Exposure therefore differs in the same direction as the
+       result. Huang et al. (2024) raise the same concern for their species.
 
-       Method: split the model panel by whether its training corpus includes
-       Xeno-canto, then compare the aa-to-ag performance ratio between the two
-       groups. Accuracy is divided by chance first, so the different bird counts
-       (8 against 12) do not confound the comparison.
+       Method: report the species ratio for the two SPEECH models only. Their
+       training corpus is human speech and nothing else, so their exposure to
+       both macaws is zero. If exposure drove the difference, these two models
+       should show none.
 
-       Result: no difference. The ratio is 1.31 for models that saw Xeno-canto
-       and 1.36 for models that did not (Mann-Whitney p = 0.59). The clearest
-       single case is wavlm_base_plus_sv, trained only on human speech with zero
-       exposure to either bird, which shows the LARGEST gap of any model (1.68).
-       Pretraining exposure does not explain the species difference.
+       Only two models are used on purpose. A panel-wide version would need the
+       training corpus of all 15 models classified correctly. That is hard to
+       establish from the primary sources and easy to get wrong, and a wrong
+       classification would invalidate the control. The corpus of ecapa_tdnn and
+       wavlm_base_plus_sv is not in doubt.
+
+       Result: ecapa_tdnn 1.29 and wavlm_base_plus_sv 1.68, against 1.10 to 1.59
+       for every other model. The difference appears at full strength in models
+       with zero exposure, so exposure does not explain it.
+
+       CAUTION: this rules out ONE alternative. It does NOT show the difference
+       is biological. The two datasets differ in bird count, call types, calls
+       per bird, recordings per bird (median 24 against 6), recordist, equipment,
+       room and season. Those cannot be matched simultaneously, because the ag
+       set has too few recordings per bird. Report the species difference
+       descriptively. Do not read it as a property of the calls.
 """
 import os
 from pathlib import Path
@@ -391,57 +401,53 @@ def kinship(frame, species, model):
 # =============================================================================
 
 def pretraining_exposure(all_results):
-    """Test whether the species gap tracks Xeno-canto exposure.
+    """Report the species ratio for the two human-speech models.
 
-    all_results is the per-model, per-species accuracy collected by the caller.
+    all_results is {model: {species: (accuracy, chance)}}.
 
-    The function reports accuracy divided by chance, so the different bird
-    counts of the two species do not confound the comparison. It then compares
-    the aa-to-ag ratio between models whose training corpus includes Xeno-canto
-    and models whose corpus does not.
+    Those two models were trained on human speech only, so their exposure to
+    both macaws is zero. If pretraining exposure drove the species difference,
+    the difference should vanish for them.
 
-    A difference would mean the species gap is partly an artefact of how much of
-    each macaw the models saw during pretraining. No difference means the gap is
-    a property of the calls.
+    Accuracy is divided by chance first, so the different bird counts of the two
+    species do not confound the ratio.
     """
-    from scipy import stats
+    ZERO_EXPOSURE = ["ecapa_tdnn", "wavlm_base_plus_sv"]
 
-    panel = CONFIG["models"]
     rows = []
     for model, scores in all_results.items():
-        if "aa" not in scores or "ag" not in scores or model not in panel:
+        if "aa" not in scores or "ag" not in scores:
             continue
+        aa_lift = scores["aa"][0] / scores["aa"][1]
+        ag_lift = scores["ag"][0] / scores["ag"][1]
         rows.append(
             {
                 "model": model,
-                "family": panel[model]["family"],
-                "saw_xeno_canto": bool(panel[model]["xeno_canto"]),
-                "aa_lift": scores["aa"][0] / scores["aa"][1],
-                "ag_lift": scores["ag"][0] / scores["ag"][1],
+                "zero_exposure_to_both_species": model in ZERO_EXPOSURE,
+                "aa_lift": aa_lift,
+                "ag_lift": ag_lift,
+                "species_ratio": aa_lift / ag_lift,
             }
         )
 
-    if len(rows) < 4:
+    if not rows:
         return rows, None
 
     frame = pd.DataFrame(rows)
-    frame["species_gap"] = frame["aa_lift"] / frame["ag_lift"]
+    zero = frame[frame.zero_exposure_to_both_species]
+    other = frame[~frame.zero_exposure_to_both_species]
 
-    exposed = frame[frame.saw_xeno_canto]["species_gap"]
-    unexposed = frame[~frame.saw_xeno_canto]["species_gap"]
+    if zero.empty or other.empty:
+        return frame.to_dict("records"), None
 
-    summary = None
-    if len(exposed) >= 2 and len(unexposed) >= 2:
-        statistic, p_value = stats.mannwhitneyu(exposed, unexposed)
-        summary = {
-            "gap_with_xeno_canto": float(exposed.mean()),
-            "gap_without_xeno_canto": float(unexposed.mean()),
-            "n_with": int(len(exposed)),
-            "n_without": int(len(unexposed)),
-            "mannwhitney_u": float(statistic),
-            "p_value": float(p_value),
-        }
-
+    summary = {
+        "zero_exposure_models": ", ".join(zero.model),
+        "zero_exposure_ratio_min": float(zero.species_ratio.min()),
+        "zero_exposure_ratio_max": float(zero.species_ratio.max()),
+        "other_models_ratio_min": float(other.species_ratio.min()),
+        "other_models_ratio_max": float(other.species_ratio.max()),
+        "other_models_ratio_mean": float(other.species_ratio.mean()),
+    }
     return frame.to_dict("records"), summary
 
 
@@ -522,12 +528,15 @@ def main():
         print(f"  pretraining_exposure.csv {len(exposure_rows)} rows")
     if exposure_summary:
         print()
-        print("Pretraining exposure control (aa/ag performance ratio):")
-        print(f"  models that saw Xeno-canto     {exposure_summary['gap_with_xeno_canto']:.2f} "
-              f"(n={exposure_summary['n_with']})")
-        print(f"  models that did not            {exposure_summary['gap_without_xeno_canto']:.2f} "
-              f"(n={exposure_summary['n_without']})")
-        print(f"  Mann-Whitney p = {exposure_summary['p_value']:.3f}")
+        print("Pretraining exposure control (aa/ag ratio, accuracy over chance):")
+        print(f"  zero exposure to both species ({exposure_summary['zero_exposure_models']}): "
+              f"{exposure_summary['zero_exposure_ratio_min']:.2f} to "
+              f"{exposure_summary['zero_exposure_ratio_max']:.2f}")
+        print(f"  every other model: "
+              f"{exposure_summary['other_models_ratio_min']:.2f} to "
+              f"{exposure_summary['other_models_ratio_max']:.2f} "
+              f"(mean {exposure_summary['other_models_ratio_mean']:.2f})")
+        print("  The difference appears at full strength with zero exposure.")
 
     if shift_rows:
         summary = pd.DataFrame(shift_rows).groupby(["species", "model"])["lift_over_chance"].mean()
