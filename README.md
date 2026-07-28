@@ -1,8 +1,11 @@
 # Individual identification from parrot calls
 
-This repository reproduces every result in the paper on acoustic individual identification in
-two macaw species. It covers two species, 15 pre-trained embedding models, an MFCC baseline,
-and a metric-learning head.
+This repository produces every result table in the paper on acoustic individual identification
+in two macaw species. It covers 15 pre-trained embedding models, an MFCC baseline, and a
+metric-learning head.
+
+The pipeline produces DATA, not figures. Every output is a CSV file. Figures are made
+separately from those files, so a change to a figure never changes a result.
 
 The species are:
 
@@ -13,8 +16,8 @@ The species are:
 
 ## 1. Quick start
 
-To reproduce every number and figure from the published embeddings, run these commands. This
-path does not need a GPU.
+To reproduce every result table from the published embeddings, run these commands. This path
+does not need a GPU.
 
 ```bash
 conda env create -f environment.yml
@@ -59,7 +62,7 @@ The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
 | 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU | 1 min |
 | 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU | 1 to 2 h |
 | 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU | 3 to 6 h |
-| 5 | `05_diagnostics.py`, `06_tables_figures.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/` | CPU | 30 min |
+| 5 | `05_diagnostics.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/diagnostics/` | CPU | 20 min |
 
 Stage 0 builds the master metadata table. This table is the single source of truth for the
 bird identity and the `recording_id` of every clip. Every later stage reads it.
@@ -112,7 +115,6 @@ macaw-individual-id/
 │   ├── 03_classify.py
 │   ├── 04_metric_learning.py
 │   ├── 05_diagnostics.py
-│   ├── 06_tables_figures.py
 │   ├── 07_manifest.py
 │   ├── 08_freeze_environment.py
 │   └── 09_supplementary_bouts.py
@@ -201,8 +203,8 @@ The assumption is necessary here, because 14 of 74 `ag` recordings and 2 of 211 
 recordings hold calls from two birds. To pool all calls in those recordings would average two
 birds into one query.
 
-`06_tables_figures.py` also reports the single-bird recordings on their own, as a sensitivity
-check.
+`03_classify.py` records the number of multi-bird recordings in every result row, so the
+assumption stays visible in the output.
 
 ### 6.6 Clustering metrics
 

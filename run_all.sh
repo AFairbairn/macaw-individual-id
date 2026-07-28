@@ -3,7 +3,10 @@
 # run_all.sh
 #
 # PURPOSE
-#   Reproduce every result in the parrot individual-identification paper.
+#   Produce every result table in the macaw individual-identification paper.
+#
+#   This pipeline produces DATA, not figures. Every output is a CSV file.
+#   Figures are made separately from those CSV files.
 #
 # USAGE
 #   ./run_all.sh [STAGE]
@@ -248,16 +251,18 @@ for sp in aa ag; do
 done
 
 # =============================================================================
-say "STAGE 5 of 5   Diagnostics, tables, figures, manifest   [CPU, 10 minutes]"
+say "STAGE 5 of 5   Diagnostics and manifest   [CPU, 20 minutes]"
 # =============================================================================
-python src/05_diagnostics.py     # Domain shift, within call type, kinship.
-python src/06_tables_figures.py  # Every table and figure in the paper.
+# Domain shift, within call type, and kinship. These are result tables, not
+# figures. This pipeline produces data only. Figures are made separately.
+python src/05_diagnostics.py
 
 # The supplementary bout comparison. It runs only when the supplementary audio
-# is present, and it never enters a main result. See src/09_supplementary_bouts.py
+# is present, and it never enters a main result.
 python src/09_supplementary_bouts.py
 
-python src/07_manifest.py        # An md5 checksum for every output.
+# An md5 checksum for every output, so a rerun can be diffed.
+python src/07_manifest.py
 
 say "COMPLETE"
 echo "  results/                All tables and figures."
