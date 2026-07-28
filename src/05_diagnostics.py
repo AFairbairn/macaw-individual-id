@@ -93,9 +93,32 @@ THE THREE DIAGNOSTICS
            A. ambiguus     2.3 calls per recording   P(leak) 0.56   delta 0.10
            A. glaucogularis 13.5 calls per recording  P(leak) 0.93   delta 0.24-0.29
 
-       This explains the species difference in our own results without invoking
-       biology, and it gives a usable rule: report calls per recording, because
-       it predicts how badly a random split will mislead.
+       WHY THE TWO DATASETS DIFFER, and why it generalises. The two sets were
+       collected for different purposes. The A. ambiguus set was collected for
+       individual identification, so it samples each bird across many separate
+       recordings and takes few calls from each. The A. glaucogularis set was
+       collected to prepare playback stimuli, so it harvests many calls from
+       each session, which is the efficient design for that purpose.
+
+       Neither design is wrong. They are optimal for different questions. But
+       they carry very different leakage risk when the data is used for
+       individual identification.
+
+       This matters beyond our two datasets, because most individual-ID work
+       reuses recordings collected for something else. Gallego et al. (2026)
+       used four public datasets and recorded none of them. Huang et al. (2024)
+       cut their cockatoo calls from 3 to 4 hour continuous nest recordings,
+       which is the high-calls-per-recording design. A dataset collected for
+       playback, repertoire or welfare work will tend to have many calls per
+       recording, and will therefore be the most vulnerable to inflation when
+       it is reused for identification, exactly where the risk is least likely
+       to be noticed.
+
+       Two things follow, and both are usable:
+         1. Report calls per recording. It predicts how badly a random split
+            will mislead, and it is free to compute.
+         2. When collecting FOR identification, spread the sampling across many
+            recordings rather than taking many calls from a few.
 
        NOTE ON WHAT THIS REPLACES: an earlier version tested whether the species
        difference tracked pretraining exposure (Xeno-canto holds 48 recordings
