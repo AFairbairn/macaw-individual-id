@@ -160,8 +160,13 @@ if [[ "$DEVICE" == "cpu" ]]; then
 EOF
 fi
 
+# The pipeline needs Python 3.11 or newer, because bacpipe publishes no build
+# for 3.10. Check this before the imports, so the message names the real cause.
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" \
+  || die "Python 3.11 or newer is required. This is $(python -V 2>&1). See README section 1.1."
+
 python -c "import numpy, pandas, sklearn, torch, librosa, yaml" \
-  || die "The environment is incomplete. Create it with: conda env create -f environment.yml"
+  || die "The environment is incomplete. Create it with: pip install -r requirements.txt"
 
 # -----------------------------------------------------------------------------
 # Step 1b. Check the software and the model weights against the record.

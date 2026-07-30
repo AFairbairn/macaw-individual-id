@@ -18,21 +18,29 @@ The species are:
 
 ### 1.1 Software
 
-Create the environment. Use conda where it is available.
+**Python 3.11 or newer is required.** bacpipe publishes no build for 3.10, and bacpipe
+supplies 13 of the 15 pre-trained models.
 
 ```bash
-conda env create -f environment.yml
-conda activate parrot-id
-```
-
-On a machine with no conda, use pip and a virtual environment. `requirements.txt` holds the
-same set.
-
-```bash
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
+```
+
+`requirements.txt` names four packages. bacpipe pins the rest of the stack, and it pulls
+torch, torchaudio, transformers, librosa, numpy, pandas, scipy, scikit-learn and PyYAML with
+it.
+
+If the machine has no Python 3.11 and you cannot install one, use `uv`. It puts a standalone
+interpreter in your home directory and needs no administrator rights.
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv python install 3.11
+uv venv --python 3.11 .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
 
 To record the environment that produced a set of results, run this once, in the activated
@@ -176,8 +184,7 @@ bird identity and the `recording_id` of every clip. Every later stage reads it.
 macaw-individual-id/
 ├── README.md                     This file.
 ├── LICENSE                       MIT.
-├── environment.yml               Pinned dependencies, for conda.
-├── requirements.txt              The same set, for pip.
+├── requirements.txt              The four direct dependencies.
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
 ├── docs/
@@ -358,7 +365,7 @@ through the `CPU_ONLY_MODELS` list.
 Warning: Do not run `pip install -U jax[cuda12]`. The `-U` flag upgrades numpy to version 2,
 which breaks the pinned torch and bacpipe environment.
 
-To repair a broken environment, delete it and rebuild it from `environment.yml`. Then run
+To repair a broken environment, delete it and rebuild it from `requirements.txt`. Then run
 `python src/08_freeze_environment.py verify`.
 
 ### 8.5 Stage 4 writes only at the end of a subset

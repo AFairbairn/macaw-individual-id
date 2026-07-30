@@ -89,7 +89,7 @@ def installed_packages():
     """Return the output of `pip freeze` as a list of lines.
 
     `pip freeze` reports the exact installed version of every package. It is
-    more precise than environment.yml, which can hold a version range.
+    more precise than requirements.txt, which can hold a version range.
     """
     result = subprocess.run(
         [sys.executable, "-m", "pip", "freeze"],
