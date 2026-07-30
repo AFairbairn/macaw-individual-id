@@ -9,6 +9,12 @@ USAGE
     python src/01_extract_embeddings.py --species aa --device cuda
     python src/01_extract_embeddings.py --species ag --device cpu
 
+    To recompute one model, or a few, without touching the rest:
+    python src/01_extract_embeddings.py --species ag --models beats,audiomae
+
+    Delete the output directory of a model before you recompute it. bacpipe
+    tries to continue a partly filled directory, and that path is unreliable.
+
 INPUT
     audio_padded/    The padded audio that 00a_pad_audio.py writes.
 
@@ -174,11 +180,15 @@ def set_bacpipe_device(device):
         path.write_text(updated)
 
 
-def run_bacpipe_models(audio_dir, device):
-    """Compute the embeddings of the 13 bacpipe models."""
+def run_bacpipe_models(audio_dir, device, wanted=None):
+    """Compute the embeddings of the bacpipe models.
+
+    When wanted is set, only those models run. Everything else is left alone,
+    so a model that failed can be recomputed without touching the rest.
+    """
     import bacpipe
 
-    for model in BACPIPE_MODELS:
+    for model in [m for m in BACPIPE_MODELS if wanted is None or m in wanted]:
         model_device = "cpu" if model in CPU_ONLY_MODELS else device
         set_bacpipe_device(model_device)
         print(f"=== bacpipe: {model} (device={model_device}) ===", flush=True)
@@ -264,7 +274,7 @@ def build_speech_encoder(model, device):
     return encode
 
 
-def run_speech_models(audio_dir, device):
+def run_speech_models(audio_dir, device, wanted=None):
     """Compute the embeddings of the 2 speech models.
 
     The output path matches the bacpipe layout, so 03_classify.py reads all 15
@@ -272,7 +282,7 @@ def run_speech_models(audio_dir, device):
     """
     files = sorted(audio_dir.rglob("*.wav"))
 
-    for model in SPEECH_MODELS:
+    for model in [m for m in SPEECH_MODELS if wanted is None or m in wanted]:
         print(f"=== speech: {model} ({len(files)} files, device={device}) ===", flush=True)
 
         out_dir = (
@@ -313,7 +323,27 @@ def main():
         default="",
         help="'cuda' or 'cpu'. The script detects the device when this is not set.",
     )
+    parser.add_argument(
+        "--models",
+        default="",
+        help=(
+            "A comma separated list of model names. Only these models run. "
+            "Use this to recompute one model without touching the others. "
+            "The default is every model."
+        ),
+    )
     args = parser.parse_args()
+
+    wanted = None
+    if args.models:
+        wanted = [name.strip() for name in args.models.split(",") if name.strip()]
+        known = set(BACPIPE_MODELS) | set(SPEECH_MODELS)
+        unknown = [name for name in wanted if name not in known]
+        if unknown:
+            raise SystemExit(
+                f"Unknown model name(s): {', '.join(unknown)}. "
+                f"Known models: {', '.join(sorted(known))}"
+            )
 
     device = args.device
     if not device:
@@ -328,8 +358,11 @@ def main():
     print(f"Audio:   {audio_dir}", flush=True)
     print(f"Device:  {device}", flush=True)
 
-    run_bacpipe_models(audio_dir, device)
-    run_speech_models(audio_dir, device)
+    if wanted:
+        print(f"Models:  {', '.join(wanted)}", flush=True)
+
+    run_bacpipe_models(audio_dir, device, wanted)
+    run_speech_models(audio_dir, device, wanted)
 
     print("Extraction finished. Now run src/01b_verify_embeddings.py.", flush=True)
 
