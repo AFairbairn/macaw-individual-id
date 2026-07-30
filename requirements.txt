@@ -1,0 +1,57 @@
+# =============================================================================
+# requirements.txt
+#
+# PURPOSE
+#   Build the environment with pip and a virtual environment, on a machine
+#   that has no conda. environment.yml holds the same set for conda.
+#
+# USAGE
+#   python3 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -U pip
+#   pip install -r requirements.txt
+#
+# WARNING
+#   Do not run `pip install -U jax[cuda12]`. The -U flag upgrades numpy to
+#   version 2, which breaks torch and bacpipe. The JAX models (perch_bird,
+#   perch_v2, surfperch) run on CPU by design.
+#
+# NOTE
+#   numpy stays below version 2, because several packages here fail on numpy 2.
+#   Python 3.10 is the version the pins were resolved against.
+#
+#   speechbrain and transformers carry no version here, because the version
+#   that produced the published results is not yet recorded. Install the
+#   environment, then run `python src/08_freeze_environment.py freeze` to write
+#   the exact resolved versions into environment.lock/.
+# =============================================================================
+
+# Core numerical stack.
+numpy<2
+pandas==2.2.*
+scipy==1.13.*
+scikit-learn==1.5.*
+pyyaml==6.*
+
+# Audio. librosa reads the audio files. soundfile is its file backend.
+librosa==0.10.*
+soundfile==0.12.*
+
+# Torch. The metric-learning head and the torch embedding models use it.
+# For a CUDA build other than the default wheel, install the matching wheel
+# from pytorch.org first, then run this file.
+torch==2.3.1
+torchaudio==2.3.1
+
+# The two speech speaker-verification models.
+# ecapa_tdnn comes from speechbrain. wavlm_base_plus_sv comes from transformers.
+speechbrain
+transformers
+
+# bacpipe supplies the other 13 pre-trained embedding models.
+# CAUTION: bacpipe reads its device from settings.yaml inside the package. It
+# does not detect CUDA. run_all.sh sets that value.
+bacpipe==0.1.0
+
+# Tests.
+pytest==8.*

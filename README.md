@@ -18,12 +18,21 @@ The species are:
 
 ### 1.1 Software
 
-Install [conda](https://docs.conda.io), then create the environment. `environment.yml` pins
-every version.
+Create the environment. Use conda where it is available.
 
 ```bash
 conda env create -f environment.yml
 conda activate parrot-id
+```
+
+On a machine with no conda, use pip and a virtual environment. `requirements.txt` holds the
+same set.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
 ```
 
 To record the environment that produced a set of results, run this once, in the activated
@@ -167,7 +176,8 @@ bird identity and the `recording_id` of every clip. Every later stage reads it.
 macaw-individual-id/
 ├── README.md                     This file.
 ├── LICENSE                       MIT.
-├── environment.yml               Pinned dependencies.
+├── environment.yml               Pinned dependencies, for conda.
+├── requirements.txt              The same set, for pip.
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
 ├── docs/

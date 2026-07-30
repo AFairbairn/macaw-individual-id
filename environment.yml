@@ -8,6 +8,9 @@
 #   conda env create -f environment.yml
 #   conda activate parrot-id
 #
+#   On a machine with no conda, use requirements.txt and a virtual environment.
+#   It holds the same set.
+#
 # WARNING
 #   Do not run `pip install -U jax[cuda12]`. The -U flag upgrades numpy to
 #   version 2, which breaks the pinned torch and bacpipe environment. JAX models
@@ -31,28 +34,30 @@ dependencies:
   - scikit-learn=1.5.*
   - pyyaml=6.*
 
-  # Audio.
+  # Audio. librosa reads the audio files. soundfile is its file backend.
   - librosa=0.10.*
   - soundfile=0.12.*
-
-  # Clustering and projection.
-  - hdbscan=0.8.*
-  - umap-learn=0.5.*
-
-  # Figures.
-  - matplotlib=3.9.*
 
   # Tests.
   - pytest=8.*
 
   - pip
   - pip:
-      # PyTorch. The metric-learning head uses it.
-      # For a CUDA build, install the matching wheel from pytorch.org after you
-      # create the environment.
+      # Torch. The metric-learning head and the torch embedding models use it.
+      # For a CUDA build other than the default wheel, install the matching
+      # wheel from pytorch.org after you create the environment.
       - torch==2.3.1
+      - torchaudio==2.3.1
 
-      # bacpipe supplies the 15 pre-trained embedding models.
+      # The two speech speaker-verification models. ecapa_tdnn comes from
+      # speechbrain. wavlm_base_plus_sv comes from transformers. Neither
+      # carries a version here, because the version that produced the published
+      # results is not yet recorded. Run 08_freeze_environment.py freeze to
+      # write the resolved versions into environment.lock/.
+      - speechbrain
+      - transformers
+
+      # bacpipe supplies the other 13 pre-trained embedding models.
       # CAUTION: bacpipe reads its device from settings.yaml inside the package.
       # It does not detect CUDA. run_all.sh sets that value.
       - bacpipe==0.1.0
