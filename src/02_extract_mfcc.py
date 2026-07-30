@@ -23,7 +23,7 @@ USAGE
 INPUT
     config.yaml                              The MFCC settings.
     data/<species>/metadata/<species>_master.csv   The clip list.
-    The audio files named in the master column rel_audio_path.
+    audio_padded/    The padded audio that 00a_pad_audio.py writes.
 
 OUTPUT
     mfcc_results/<species>/embeddings/<stamp>___<variant>-<species>/single/
@@ -68,6 +68,7 @@ import pandas as pd
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+PADDED = ROOT / "audio_padded"
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 MFCC = CONFIG["mfcc"]
 
@@ -155,14 +156,19 @@ def clips_for(species):
 
     rows, missing = [], 0
     for _, record in master.iterrows():
-        audio_path = ROOT / record["rel_audio_path"]
+        audio_path = PADDED / record["rel_audio_path"]
         if not audio_path.exists():
             missing += 1
             continue
         rows.append((record["original_stem"], record["recording_id"], audio_path))
 
+    # A missing file means this baseline is scored on fewer clips than the
+    # pre-trained models, which would make the comparison wrong. Stop instead.
     if missing:
-        print(f"  Warning: {missing} audio file(s) named in the master are missing.")
+        raise SystemExit(
+            f"{missing} of {len(master)} clip(s) are absent from {PADDED}. "
+            "Run: python src/00a_pad_audio.py"
+        )
     return rows
 
 

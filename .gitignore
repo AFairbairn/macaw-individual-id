@@ -18,6 +18,9 @@ mfcc_results/
 # Downloaded model weights. 01a_fetch_checkpoints.py recreates them.
 bacpipe/
 
+# The padded audio. 00a_pad_audio.py recreates it from the published audio.
+audio_padded/
+
 # Python.
 __pycache__/
 *.pyc

@@ -10,7 +10,7 @@ USAGE
     python src/01_extract_embeddings.py --species ag --device cpu
 
 INPUT
-    The audio of one species, under $PARROT_DATA.
+    audio_padded/    The padded audio that 00a_pad_audio.py writes.
 
 OUTPUT
     bacpipe_results/<species>/embeddings/<stamp>___<model>-<species>/.../
@@ -71,6 +71,7 @@ import yaml  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
+PADDED = ROOT / "audio_padded"
 
 # The 13 models that bacpipe provides.
 BACPIPE_MODELS = [
@@ -92,13 +93,21 @@ SPEECH_SAMPLE_RATE = 16000
 def audio_dir_for(species):
     """Return the audio directory of one species.
 
+    The directory is the padded copy that 00a_pad_audio.py writes, not the
+    published audio. Two models fail on the shortest clips, so every model
+    reads the same padded input. See the docstring of 00a_pad_audio.py.
+
     The directory name becomes part of the output path, so bacpipe writes to
     bacpipe_results/<species>/.
     """
-    for candidate in (DATA / species / "audio", DATA / species / "all_calls", DATA / species):
+    root = PADDED / "data" / species
+    for candidate in (root / "audio", root / "all_calls", root):
         if candidate.exists() and any(candidate.rglob("*.wav")):
             return candidate
-    raise SystemExit(f"No audio found for {species} under {DATA}.")
+    raise SystemExit(
+        f"No padded audio found for {species} under {PADDED}. "
+        "Run: python src/00a_pad_audio.py"
+    )
 
 
 def set_bacpipe_device(device):

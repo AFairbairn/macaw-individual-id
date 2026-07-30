@@ -226,6 +226,11 @@ for sp in aa ag; do
   [[ -f "data/${sp}/metadata/${sp}_master.csv" ]] \
     || die "Missing data/${sp}/metadata/${sp}_master.csv"
 done
+
+# Two models fail on the shortest clips. Every model reads the padded copy, so
+# the input is the same for all of them. See src/00a_pad_audio.py.
+python src/00a_pad_audio.py \
+  || die "The audio could not be padded. See the output above."
 end_stage
 
 # =============================================================================
