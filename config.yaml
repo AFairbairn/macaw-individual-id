@@ -177,6 +177,25 @@ models:
 #    call gives 15 to 140 frames, so the standard deviation of each
 #    coefficient is noisier than in their study. Report this limit.
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Checkpoints that bacpipe does not fetch by itself
+#
+# bacpipe downloads the weights of most models on first use. BirdNET is the
+# exception. Without this download the model writes zero embeddings and the run
+# looks successful until 01b_verify_embeddings.py counts the files.
+#
+# src/01a_fetch_checkpoints.py reads this block and writes to
+# bacpipe/model_checkpoints below the repository root, which is where bacpipe
+# looks.
+# -----------------------------------------------------------------------------
+checkpoints:
+  birdnet:
+    repo_id: vskode/bacpipe_models
+    repo_type: dataset
+    patterns:
+      - birdnet/birdnetv2.4.keras
+      - birdnet/BirdNET_Preprocessor/*
+
 mfcc:
   sample_rate: 16000
   window_seconds: 0.025

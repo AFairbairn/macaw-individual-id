@@ -15,6 +15,9 @@ logs/
 bacpipe_results/
 mfcc_results/
 
+# Downloaded model weights. 01a_fetch_checkpoints.py recreates them.
+bacpipe/
+
 # Python.
 __pycache__/
 *.pyc

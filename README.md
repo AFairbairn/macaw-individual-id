@@ -99,7 +99,7 @@ Note: Three groups of models always run on CPU, even on a GPU node.
 
 - `perch_bird`, `perch_v2`, and `surfperch` use JAX.
 - `birdnet` uses TensorFlow.
-- `avesecho_passt` is pinned to CPU. See section 8.3.
+- `avesecho_passt` is pinned to CPU. See section 8.4.
 
 ---
 
@@ -167,7 +167,7 @@ The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
 | Stage | Script | Output | Hardware |
 |---|---|---|---|
 | 0 | `00_build_master_metadata.py` | `data/<sp>/metadata/<sp>_master.csv` | CPU |
-| 1 | `01_extract_embeddings.py`, `01b_verify_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU |
+| 1 | `01a_fetch_checkpoints.py`, `01_extract_embeddings.py`, `01b_verify_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU |
 | 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU |
 | 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU |
 | 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU |
@@ -192,6 +192,7 @@ macaw-individual-id/
 │   └── WRITING_STANDARD.md       How this repository is written.
 ├── src/
 │   ├── 00_build_master_metadata.py
+│   ├── 01a_fetch_checkpoints.py
 │   ├── 01_extract_embeddings.py
 │   ├── 01b_verify_embeddings.py
 │   ├── 02_extract_mfcc.py
@@ -340,7 +341,16 @@ is then much slower and gives no error.
 
 `run_all.sh` sets this value automatically and keeps a backup of the original file.
 
-### 8.2 bacpipe prints harmless errors
+### 8.2 bacpipe does not fetch the BirdNET checkpoint
+
+bacpipe downloads the weights of most of its models on first use. BirdNET is the exception.
+Without the checkpoint that model writes zero embeddings, and the log looks normal.
+
+`src/01a_fetch_checkpoints.py` downloads it into `bacpipe/model_checkpoints`, which is where
+bacpipe looks. `run_all.sh` runs it before stage 1 and stops the run if the download fails.
+The dataset repository and the file patterns are in the `checkpoints` block of `config.yaml`.
+
+### 8.3 bacpipe prints harmless errors
 
 After `bacpipe` writes the embeddings, it runs a dashboard step that this pipeline does not
 use. That step prints many tracebacks. The messages below are harmless.
@@ -354,13 +364,13 @@ use. That step prints many tracebacks. The messages below are harmless.
 Do not use the absence of tracebacks to confirm success. Run `01b_verify_embeddings.py`
 instead. That script counts the `.npy` files for each model.
 
-### 8.3 avesecho_passt fails on CUDA
+### 8.4 avesecho_passt fails on CUDA
 
 `avesecho_passt` moves the model to the device but not the input audio. On CUDA, every file
 fails and the model writes zero embeddings. `01_extract_embeddings.py` pins this model to CPU
 through the `CPU_ONLY_MODELS` list.
 
-### 8.4 Do not upgrade JAX
+### 8.5 Do not upgrade JAX
 
 Warning: Do not run `pip install -U jax[cuda12]`. The `-U` flag upgrades numpy to version 2,
 which breaks the pinned torch and bacpipe environment.
@@ -368,7 +378,7 @@ which breaks the pinned torch and bacpipe environment.
 To repair a broken environment, delete it and rebuild it from `requirements.txt`. Then run
 `python src/08_freeze_environment.py verify`.
 
-### 8.5 Stage 4 writes only at the end of a subset
+### 8.6 Stage 4 writes only at the end of a subset
 
 `04_metric_learning.py` writes its results when a subset finishes. If the process stops in the
 middle of a subset, the work for that subset is lost.

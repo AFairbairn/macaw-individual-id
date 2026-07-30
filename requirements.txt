@@ -41,5 +41,8 @@ speechbrain
 # line makes the constraint visible and fails early if that ever changes.
 numpy<2
 
+# The BirdNET checkpoint download in 01a_fetch_checkpoints.py.
+huggingface_hub
+
 # Tests.
 pytest

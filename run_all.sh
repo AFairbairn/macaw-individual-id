@@ -234,6 +234,11 @@ if [[ "$STAGE" == "all" || "$STAGE" == "embed" ]]; then
 # =============================================================================
   set_bacpipe_device "$DEVICE"
 
+  # bacpipe does not fetch the BirdNET checkpoint. Without it that model writes
+  # zero embeddings and the log looks normal.
+  python src/01a_fetch_checkpoints.py \
+    || die "A model checkpoint could not be downloaded. See the output above."
+
   for sp in aa ag; do
     python src/01_extract_embeddings.py --species "$sp" --device "$DEVICE"
   done
