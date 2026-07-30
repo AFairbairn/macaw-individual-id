@@ -54,8 +54,9 @@ RESULT
 CAUTION
     The controlled design costs sample size. Only the birds that support every
     condition are used, and each condition uses 12 calls for each of those
-    birds. Report the bird count and the call count with the result. The trend
-    is the finding. The absolute values are not comparable to the main table.
+    birds. Every output row carries n_birds and calls_per_bird, so both counts
+    travel with the result. The trend is the finding. The absolute values are
+    not comparable to the main table.
 """
 import os
 from pathlib import Path
@@ -80,7 +81,9 @@ N_FOLDS = CONFIG["split"]["n_folds"]
 # cannot run this experiment: its recordings hold a median of one call, so there
 # is nothing to remove.
 SPECIES = "ag"
-SUBSET_COLUMN, SUBSET_VALUE = "environment_class", "lab"
+SUBSET = "lab"
+# The subset rule comes from config.yaml, so one edit there changes every stage.
+SUBSET_COLUMN, SUBSET_VALUE = next(iter(CONFIG["subsets"][SPECIES][SUBSET].items()))
 MODEL = "birdnet"
 
 # (recordings per bird, calls per recording). The product is constant, so the

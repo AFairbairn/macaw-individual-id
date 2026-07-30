@@ -30,8 +30,7 @@ WHY THIS STAGE EXISTS
     01b_verify_embeddings.py counts the files.
 
     WavLMForXVector fails the same way. Its convolution and TDNN stack needs a
-    minimum number of frames. An earlier version of this project lost about 75
-    WavLM embeddings to this before the input was padded.
+    minimum number of frames.
 
     The fix is the same for both. Give every model an input at or above the
     minimum length.
@@ -46,8 +45,8 @@ WHY BOTH SPECIES GET THE SAME TREATMENT
 WHAT THE PADDING DOES TO THE SIGNAL
     The padding is silence at the end of the clip. It adds no acoustic content.
     It moves the call to the start of a longer window, which is where a model
-    that pads internally would put it anyway. Report the minimum length in the
-    methods, because it is a preprocessing choice and not a property of the
+    that pads internally would put it anyway. The minimum length is a
+    preprocessing choice of this pipeline and not a property of the
     recordings.
 
 RERUNNING
@@ -87,11 +86,11 @@ def source_path(relative):
 def pad_one(source, target, minimum_samples):
     """Write one padded file. Return the number of samples that were added.
 
-    The written file keeps the sample format of the source. soundfile writes
-    16 bit by default, so a file that is written and a file that is copied
-    would otherwise differ in bit depth. Clip length decides which branch a
-    clip takes, and mean clip length differs between the two species, so that
-    difference would sit inside the species comparison.
+    The written file keeps the format and the subtype of the source, so a
+    padded file and a copied file share one bit depth. Clip length decides
+    which branch a clip takes. Mean clip length differs between the two
+    species, so a bit-depth difference would sit inside the species
+    comparison.
 
     The file is written to a temporary name and then moved into place. A run
     that stops in the middle therefore leaves no half-written file for the next

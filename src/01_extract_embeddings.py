@@ -109,15 +109,8 @@ def audio_dir_for(species):
         the output path directly.
 
         So this function returns the species directory, whose name is the
-        species code, and bacpipe writes to bacpipe_results/<species>/.
-
-        An earlier version returned the subdirectory below it, which is named
-        all_calls for aa and audio for ag. bacpipe then wrote to
-        bacpipe_results/all_calls/ and bacpipe_results/audio/, while
-        01b_verify_embeddings.py and 03_classify.py read
-        bacpipe_results/<species>/. The 13 bacpipe models were extracted and
-        then never found. Only the 2 speech models, whose output path this
-        file controls, were in the right place.
+        species code, and bacpipe writes to bacpipe_results/<species>/. That
+        is the path 01b_verify_embeddings.py and 03_classify.py read.
     """
     root = PADDED / "data" / species
     if root.exists() and any(root.rglob("*.wav")):
@@ -242,11 +235,10 @@ def run_bacpipe_models(audio_dir, device, wanted=None, clear=False):
             # embeddings are already on disk when it does. So one model is not
             # allowed to end the run.
             #
-            # PRINT THE WHOLE THING. An earlier version printed the exception
-            # type alone. A disk that filled up, a checkpoint that would not
-            # load and a harmless evaluation step all looked identical, and the
-            # run carried on and reported success in every case. The message
-            # and the traceback are the difference between a minute and an hour.
+            # The message and the traceback are both printed. One exception
+            # type covers a disk that filled up, a checkpoint that would not
+            # load and a harmless evaluation step. The type alone does not say
+            # which one happened.
             import traceback
 
             print(f"  {model}: bacpipe raised {type(error).__name__}: {error}", flush=True)

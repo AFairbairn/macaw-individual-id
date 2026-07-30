@@ -79,10 +79,10 @@ data/aa/all_calls/single/*.wav
 data/ag/audio/single/<bird>/<call_type>/*.wav
 ```
 
-The master metadata tables are not part of the archive. They are curated, they are versioned
-with this code, and every stage reads them from `data/<sp>/metadata/` in the repository. Only
-the audio is read from `$PARROT_DATA`. If the archive holds its own copy of a master table,
-the repository copy is the one that counts.
+The master metadata tables live in this repository. They are curated, they are versioned with
+this code, and every stage reads them from `data/<sp>/metadata/`. Only the audio is read from
+`$PARROT_DATA`. If the archive holds its own copy of a master table, the repository copy is
+the one that counts.
 
 The archive holds three things.
 
@@ -398,8 +398,7 @@ read that copy, so every representation sees the same audio. The rule is applied
 species, because padding one and not the other would put a preprocessing difference inside
 the species comparison.
 
-Report `min_seconds` in the methods. It is a preprocessing choice, not a property of the
-recordings.
+`min_seconds` is a preprocessing choice of this pipeline, not a property of the recordings.
 
 ### 8.3 bacpipe does not fetch the BirdNET or the BEATs checkpoint
 

@@ -66,7 +66,7 @@ PACKAGES = LOCK_DIR / "packages.txt"
 WEIGHTS = LOCK_DIR / "model_weights.csv"
 PLATFORM = LOCK_DIR / "platform.json"
 
-CHUNK_BYTES = 1 << 20  # Read 1 MiB at a time, so large weight files fit in memory.
+CHUNK_BYTES = 1 << 20  # Read 1 MiB at a time, so large files do not fill memory.
 
 # File types that hold model weights. bacpipe stores weights under several
 # names, so the script matches on the suffix rather than on the file name.

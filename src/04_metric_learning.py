@@ -7,8 +7,17 @@ PURPOSE
     whether it makes the distance between two calls encode identity.
 
 USAGE
-    python src/04_metric_learning.py --species aa --dump-embeddings
-    python src/04_metric_learning.py --species ag --dump-embeddings
+    python src/04_metric_learning.py --species aa --set single --device cpu
+    python src/04_metric_learning.py --species ag --set single --device cpu
+
+    run_all.sh adds --dump-embeddings to both of these commands.
+
+    --set               The call set. 'single' is the only value.
+    --device            'cuda' or 'cpu'. The device is detected when this
+                        argument is empty. run_all.sh passes 'cpu', because
+                        CUDA kernels are not deterministic and the head is
+                        small enough to train on a CPU.
+    --dump-embeddings   Also write predictions.csv and head_embeddings.csv.
 
 INPUT
     config.yaml
@@ -51,26 +60,23 @@ THE DESIGN
         StandardScaler -> optional PCA -> Linear(in_dim, projection_dim) -> L2
 
     The head is deliberately small. A deep network learns the training calls
-    instead of the general pattern when the training set is this small. An
-    earlier attempt with a deeper ArcFace head did exactly that.
+    instead of the general pattern when the training set is this small.
 
     Two losses are compared.
       proto   Prototypical networks (Snell et al. 2017).
       supcon  Supervised contrastive (Khosla et al. 2020).
 
-    Triplet loss and ArcFace were tested and dropped. Knight et al. (2024)
-    recommend triplet loss for this task. The two losses used here are more
-    recent and performed better on this data. Justify that choice in the
-    manuscript.
+    Knight et al. (2024) recommend triplet loss for this task. The two losses
+    used here are more recent and score higher on this data.
 
 THE TWO EVALUATIONS
     A. Closed set, session aware.
        Every bird is enrolled. This tests whether the head helps for birds that
        the system already knows.
 
-       The baseline is the FROZEN cosine centroid, not the linear probe. The
-       head must be compared against the same kind of measurement. An earlier
-       version compared a head against a probe, which is not a fair comparison.
+       The baseline is the FROZEN cosine centroid, not the linear probe. A
+       fair comparison sets the head against the same kind of measurement,
+       that is one distance to one template for each bird.
 
     B. Leave individuals out.
        The head is trained on some birds. It is then scored on birds it has

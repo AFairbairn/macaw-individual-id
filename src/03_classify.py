@@ -43,17 +43,17 @@ THE METRICS
     centroid     Cosine distance to one mean template for each bird.
     encounter    See the note below.
     verification EER and AUROC over pairs of calls.
-    clustering   KMeans, affinity propagation, and HDBSCAN.
+    clustering   KMeans, given the true number of birds.
 
 NOTE ON THE ENCOUNTER METRIC
     The encounter metric pools the calls of one bird within one recording into
     one mean query. It answers this question: given a set of calls that are
     known to come from one bird in one recording, which bird is it?
 
-    The metric assumes that the calls are already grouped by individual. State
-    this assumption in the manuscript. The assumption is necessary, because 14
-    of 74 ag recordings and 2 of 211 aa recordings hold calls from two birds. To
-    pool every call in such a recording would average two birds into one query.
+    The metric assumes that the calls are already grouped by individual. The
+    assumption is necessary, because 14 of 74 ag recordings and 2 of 211 aa
+    recordings hold calls from two birds. To pool every call in such a
+    recording would average two birds into one query.
 
 CAUTION ON THE BASELINE
     ag is not balanced. The number of calls for each bird runs from 41 to 108.
@@ -63,9 +63,9 @@ CAUTION ON THE BASELINE
 
 CAUTION ON THE CLUSTERING METRICS
     Do not report NMI on its own. NMI increases as the number of clusters
-    increases. Affinity propagation infers 37 to 85 clusters for 8 to 16 birds,
-    so its NMI is higher than the NMI of KMeans while its ARI is lower. The
-    script reports NMI, AMI, ARI, and the inferred number of clusters together.
+    increases, so it favours any method that produces many clusters. The script
+    reports NMI, AMI and ARI together. ARI is the primary value, because it is
+    corrected for chance.
 """
 import argparse
 import collections
@@ -158,9 +158,9 @@ def load_embeddings(model_dir, model, master, single_stems):
     protocol fixes.
 
     The function skips a clip when any of these is true:
-      - The clip is in the drop list.
       - The clip is not in the master table.
       - The recording of the clip could not be resolved.
+      - The embedding file does not load, or it holds no matrix.
     """
     rows = []
     for path in sorted(model_dir.rglob(f"*_{model}.npy")):
@@ -340,8 +340,7 @@ def run_encounter(features, labels, groups):
     NOTE: The function groups on (bird, recording), not on recording alone. Some
     recordings hold two birds. To pool every call of such a recording would
     average two birds into one query. The metric therefore assumes that the
-    calls are already grouped by individual. State that assumption in the
-    manuscript.
+    calls are already grouped by individual.
     """
     encoder = LabelEncoder()
     codes = encoder.fit_transform(labels)
@@ -428,10 +427,9 @@ def run_clustering(features, labels, groups):
     train and test split, because clustering needs no training. That matches how
     the field reports clustering (Lakdari et al. 2024, Clink et al. 2021).
 
-    A session-aware clustering protocol was considered and rejected. Clustering
-    has no training step, so there is nothing for a split to protect. Any
-    "session-aware" variant would simply cluster fewer calls, which lowers the
-    scores for a reason that has nothing to do with the question.
+    Clustering has no training step, so there is nothing for a split to
+    protect. A session-aware variant would cluster fewer calls, which lowers
+    the scores for a reason that has nothing to do with the question.
 
     The real concern is different, and it is measured directly: a cluster can
     form around a RECORDING instead of around a BIRD. So the function scores the

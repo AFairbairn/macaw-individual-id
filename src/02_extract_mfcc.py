@@ -56,8 +56,8 @@ DEPARTURES FROM THE GIBBON PAPER
        matches the top of the band.
     3. Their gibbon calls last 9 to 27 seconds. Our calls last 0.19 to 1.28
        seconds. One call gives 17 to 125 frames. The standard deviation of each
-       coefficient is therefore noisier than in their study. State this limit in
-       the manuscript.
+       coefficient is therefore noisier than in their study. That noise is a
+       limit of the MFCC baseline on calls this short.
 """
 import argparse
 from pathlib import Path

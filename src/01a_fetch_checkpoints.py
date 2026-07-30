@@ -41,9 +41,9 @@ WHY THIS SCRIPT EXISTS
     zero embeddings and the run looks successful until 01b_verify_embeddings.py
     counts the files.
 
-    An earlier version of this project carried the download in a separate setup
-    script that a reader of this repository never saw. It is a stage of the
-    pipeline, so it belongs here.
+    The download is a stage of the pipeline, so it lives here and run_all.sh
+    calls it. A reader of this repository then sees every step that the
+    published numbers depend on.
 
 WHERE THE FILES GO
     bacpipe reads its checkpoints from a path relative to the working

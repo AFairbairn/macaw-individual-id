@@ -41,9 +41,9 @@ WHY THIS IS NOT IN THE MAIN ANALYSIS
     stays in the supplement.
 
 NOTE
-    The script stops with a clear message when the supplementary audio is not
-    present. The main dataset does not hold the bouts. They are published as a
-    separate supplementary set.
+    The bouts are published as a separate supplementary set, so a machine can
+    hold the main dataset alone. Where the supplementary audio is absent, the
+    script stops with a clear message.
 """
 import os
 import sys

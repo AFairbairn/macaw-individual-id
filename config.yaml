@@ -96,19 +96,18 @@ split:
   report_random_baseline: true
 
 # -----------------------------------------------------------------------------
-# Excluded clips: NONE.
+# The clip selection
 #
-# The pipeline does not exclude any clip. Every clip in the dataset is analysed.
+# Every clip in the dataset is analysed. The pipeline holds no exclusion list.
 #
-# Two files were found to be segmentation errors and were removed from the
-# PUBLISHED DATASET rather than filtered here:
+# Two segmentation errors were handled at source, in the published dataset
+# itself:
 #   acorn_upstaris_240517_0777  (aa)  111 s, one continuous recording.
 #   john_241004_doublese_01     (ag)  19.1 s, 21x the median doublese call and
 #                                     13x the next longest ag clip.
 #
-# Removing bad data from the dataset, rather than hiding it behind a filter,
-# means the published dataset is exactly what was analysed. See the dataset
-# README for the record.
+# Handling bad data at source, rather than behind a filter, makes the published
+# dataset exactly what was analysed. See the dataset README for the record.
 # -----------------------------------------------------------------------------
 
 # -----------------------------------------------------------------------------
@@ -126,15 +125,7 @@ split:
 #                 speech_speaker    Human-speech speaker verification.
 #                 handcrafted       The MFCC baseline.
 # verify        true where the training corpus needs confirming from the primary
-#               source before the manuscript states it. DO NOT publish a
-#               training-corpus claim still marked verify: true.
-#
-# NOTE: an earlier version carried a xeno_canto flag for every model, to drive a
-# pretraining-exposure control. It was removed. The control's validity depended
-# on correctly classifying the training corpus of all 15 models, which is hard
-# to establish and easy to get wrong, and the result was negative anyway. The
-# control now uses only the two speech models, whose corpus is beyond doubt.
-# See src/05_diagnostics.py, diagnostic 4.
+#               source before the manuscript states it.
 # -----------------------------------------------------------------------------
 models:
   birdnet:            {family: bird_supervised, cite: "Kahl et al. 2021", verify: false}
@@ -160,7 +151,6 @@ models:
 # variant, read at its final fixed-length output. Cauzinille et al. (2024) used
 # plain WavLM Large at the SECOND transformer layer and found it strong for
 # gibbon individual ID. Those are different configurations of the same family.
-# State that difference rather than treating the two results as contradictory.
 
 # -----------------------------------------------------------------------------
 # The MFCC baseline
@@ -173,9 +163,9 @@ models:
 # 2. The sample rate is 16 kHz. The Nyquist frequency is then 8 kHz, which
 #    matches the top of the band.
 # 3. Their gibbon calls last 9 to 27 seconds. Ours last 0.39 +/- 0.11 s (aa)
-#    and 0.58 +/- 0.20 s (ag), measured after the drop_clips exclusions. One
-#    call gives 15 to 140 frames, so the standard deviation of each
-#    coefficient is noisier than in their study. Report this limit.
+#    and 0.58 +/- 0.20 s (ag), measured over every analysed clip. One call
+#    gives 15 to 140 frames, so the standard deviation of each coefficient is
+#    noisier than in their study.
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
 # Checkpoints that bacpipe does not fetch by itself
@@ -201,7 +191,8 @@ models:
 #
 # The rule is applied to both species. To pad one and not the other would put a
 # preprocessing difference inside the species comparison, which is the main
-# result of the paper. Report min_seconds in the methods.
+# result of the paper. min_seconds is a preprocessing choice and a property of
+# the method, not a property of the recordings.
 # -----------------------------------------------------------------------------
 padding:
   min_seconds: 1.0
@@ -256,7 +247,7 @@ mfcc:
 # The head is deliberately small. A deep network learns the training calls
 # instead of the general pattern when the training set is this small.
 # The losses are supervised contrastive (Khosla et al. 2020) and prototypical
-# (Snell et al. 2017). Triplet loss and ArcFace were tested and dropped.
+# (Snell et al. 2017).
 # -----------------------------------------------------------------------------
 metric_learning:
   projection_dim: 128
@@ -281,21 +272,21 @@ metric_learning:
 # the open-set case.
 # -----------------------------------------------------------------------------
 clustering:
-  algorithms: [kmeans, affinity_propagation, hdbscan]
-  affinity_propagation:
-    damping: 0.9
-    max_iter: 1000
-    convergence_iter: 50
-  hdbscan:
-    min_cluster_size: 5
-  metrics: [nmi, ami, ari, purity]
-  report_inferred_k: true
+  algorithm: kmeans
+  metrics: [ari, ami, nmi]
+  score_against_recording: true
 
-# CAUTION: Do not report NMI on its own.
-# NMI increases as the number of clusters increases. Affinity propagation
-# infers 37 to 85 clusters for 8 to 16 birds. Its NMI is therefore higher than
-# the NMI of KMeans, while its ARI is lower. Always report NMI next to AMI or
-# ARI, and next to the inferred number of clusters.
+# KMeans runs with the true number of birds. src/03_classify.py writes
+# cluster_ari, cluster_ami and cluster_nmi against the bird, and
+# cluster_ari_recording against the recording.
+#
+# cluster_ari_recording is the control. A model that groups calls by recording
+# rather than by bird scores highly on it, which is the failure this study
+# measures.
+#
+# CAUTION: Do not report NMI on its own. NMI rises as the number of clusters
+# rises, so it rewards a method that splits the data more finely. Report it
+# next to AMI and ARI.
 
 # -----------------------------------------------------------------------------
 # Baselines

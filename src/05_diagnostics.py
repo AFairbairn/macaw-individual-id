@@ -67,8 +67,9 @@ THE FOUR DIAGNOSTICS
        Result: no effect in any model. This is a clean negative that closes the
        question and rules out kin-aware negative sampling as a necessary step.
 
-       Caution: there are only 2 or 3 families in each species. The test rules
-       out a large kinship effect, not a small one. State that limit.
+       Caution: there are only 2 or 3 families in each species. At that number
+       of families the test has the power to rule out a large kinship effect
+       only. A small effect stays within its resolution.
 
     4. Split structure
        Question: what determines how much a leaky split inflates a result?
@@ -94,13 +95,14 @@ THE FOUR DIAGNOSTICS
        Expected number of siblings in training, E = 0.8 * (k-1), averaged over
        calls. This does not saturate and it tracks the delta:
 
-           A. ambiguus       2.6 expected siblings   delta 0.10
-           A. glaucogularis 11.7 expected siblings   delta 0.24-0.29
+           aa, all subset    2.6 expected siblings   delta 0.10
+           ag, lab subset   11.7 expected siblings   delta 0.24 to 0.29
 
        CAUTION on the median. The median calls per recording is 1 for aa, but
-       that is a median over RECORDINGS. Only 22 percent of aa CALLS have no
-       sibling at all, because the many single-call recordings contribute few
-       calls in total. Do not write that most aa calls cannot leak.
+       that is a median over RECORDINGS. Counted over CALLS, 22 percent of aa
+       calls have no sibling, because the many single-call recordings
+       contribute few calls in total. The other 78 percent of aa calls have a
+       sibling and can therefore leak.
 
        WHY THE TWO DATASETS DIFFER, and why it generalises. The two sets were
        collected for different purposes. The A. ambiguus set was collected for
@@ -129,14 +131,10 @@ THE FOUR DIAGNOSTICS
          2. When collecting FOR identification, spread the sampling across many
             recordings rather than taking many calls from a few.
 
-       NOTE ON WHAT THIS REPLACES: an earlier version tested whether the species
-       difference tracked pretraining exposure (Xeno-canto holds 48 recordings
-       of A. ambiguus and 17 of A. glaucogularis). It did not. That analysis was
-       removed because it explained a species difference that should not be
-       interpreted causally in the first place. The two datasets differ in bird
+       CONFOUNDS IN THE SPECIES COMPARISON. The two datasets differ in bird
        count, call types, calls per bird, calls per recording, recordist,
-       equipment, room and season, and cannot be matched simultaneously. Report
-       the species difference descriptively.
+       equipment, room and season. No design matches all of those at once, so
+       the species difference is descriptive and not causal.
 """
 import os
 from pathlib import Path
@@ -190,9 +188,14 @@ def load_clips(species, model):
         for directory in sorted(root.iterdir()):
             if not directory.is_dir() or "___" not in directory.name:
                 continue
-            if directory.name.split("___")[1].rsplit("-", 1)[0] == model:
-                model_dir = directory
-                break
+            if directory.name.split("___")[1].rsplit("-", 1)[0] != model:
+                continue
+            # An empty directory from a stopped run must not win over a full
+            # one. 03_classify.py applies the same rule.
+            if not any(directory.rglob(f"*_{model}.npy")):
+                continue
+            model_dir = directory
+            break
 
     if model_dir is None:
         return pd.DataFrame()
@@ -432,7 +435,7 @@ def kinship(frame, species, model):
 
 
 # =============================================================================
-# Diagnostic 4: pretraining exposure
+# Diagnostic 4: split structure
 # =============================================================================
 
 def split_structure(species):
@@ -457,10 +460,16 @@ def split_structure(species):
     table = pd.read_csv(path, dtype=str)
     table = table[(table["kind"] == "single") & (table["session_known"] == "1")]
 
+    # config.yaml defines the subsets. Stage 3 and stage 4 read the same
+    # block, so one edit there changes every stage.
     rows = []
-    subsets = [("all", table)]
-    if species == "ag":
-        subsets.append(("lab", table[table["environment_class"] == "lab"]))
+    subsets = []
+    for name, rule in CONFIG["subsets"][species].items():
+        if rule is None:
+            subsets.append((name, table))
+            continue
+        column, value = next(iter(rule.items()))
+        subsets.append((name, table[table[column] == value]))
 
     for name, subset in subsets:
         per_recording = subset.groupby("recording_id").size()

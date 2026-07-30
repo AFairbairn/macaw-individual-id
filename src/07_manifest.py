@@ -80,9 +80,9 @@ def main():
         raise SystemExit(f"{RESULTS} holds no result files.")
 
     # The manifest holds the path, the size and the checksum, and nothing that
-    # changes by itself. An earlier version carried the modification time, so
-    # every line of a rerun differed from every line of the run before it and
-    # the comparison below reported that every file had changed.
+    # changes by itself. A modification time changes on every run. A manifest
+    # that carried it would make every line of a rerun differ, and the
+    # comparison would report that every file had changed.
     rows = []
     for path in files:
         stat = path.stat()

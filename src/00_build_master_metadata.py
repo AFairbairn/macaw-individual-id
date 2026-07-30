@@ -37,11 +37,10 @@ TWO MODES, AND WHY
         authors, not so that a reader can run it.
 
 WHY THE TABLE IS THE SINGLE SOURCE OF TRUTH
-    An earlier version of this pipeline read the bird and the date from the file
-    name. That was the source of a leak. The file name carries the date, but two
+    The file name carries the date, and the date is not the recording. Two
     recordings can share a date, and one recording can span two dates. Grouping
-    on the date therefore put calls from one recording on both sides of the
-    split.
+    on the date therefore puts calls from one recording on both sides of the
+    split, which is a leak.
 
     The master table carries a true recording_id instead. Every later stage
     reads the identity and the recording from this table, never from a file
@@ -52,7 +51,7 @@ THE RECORDING IDENTIFIER
     ag    The recording date and the recording start time.
 
     A clip whose source recording could not be resolved has session_known = 0.
-    61 of the 1,061 ag clips are in that state. Those clips stay in the dataset,
+    60 of the 1,060 ag clips are in that state. Those clips stay in the dataset,
     because they are valid calls. Every session-aware analysis excludes them.
 
 PRIVACY
@@ -101,9 +100,9 @@ REQUIRED_COLUMNS = [
 # single-call set. The original aa collection also holds repeated call bouts,
 # published as a separate supplementary set.
 #
-# Two files were removed as segmentation errors and are absent from the dataset:
-# acorn_upstaris_240517_0777 (aa, 111 s, a bout) and john_241004_doublese_01
-# (ag, 19.1 s). The pipeline filters no clip. Bad data was removed at source.
+# Two segmentation errors were handled at source: acorn_upstaris_240517_0777
+# (aa, 111 s, a bout) and john_241004_doublese_01 (ag, 19.1 s). The pipeline
+# filters no clip, so the counts here are the counts that were analysed.
 EXPECTED = {
     "aa": {"clips": 480, "single": 480, "birds": 8, "recordings": 211},
     "ag": {"clips": 1060, "single": 1060, "birds": 16, "recordings": 74},
@@ -139,9 +138,9 @@ def master_path(species):
 
     The table is read from the repository, not from PARROT_DATA. It is curated
     metadata and it is versioned with this code. Only the audio comes from
-    PARROT_DATA. An earlier version read the table from PARROT_DATA, which let
-    the copy in the data package drift away from the copy in the repository,
-    and stage 2 and the tests already read the repository copy.
+    PARROT_DATA. One source for the table keeps the copy in the data package
+    from drifting away from the repository copy. Stage 2 and the tests read
+    the repository copy.
     """
     return ROOT / f"data/{species}/metadata/{species}_master.csv"
 
@@ -185,9 +184,9 @@ def validate(species):
     # present but empty is worse, because it survives an existence check and
     # then stops the run in the middle of stage 0 or stage 1.
     #
-    # This happened. One of 1541 files was truncated to zero bytes while the
-    # data package was being copied, and it was found by a crash three stages
-    # later rather than by this check.
+    # A copy of the data package can truncate one of the 1540 files to zero
+    # bytes. This check reports that file by name here, at the first stage,
+    # instead of leaving it to a crash three stages later.
     absent, empty, corrupt, wrong_checksum = [], [], [], []
     checksums = load_checksums()
 
