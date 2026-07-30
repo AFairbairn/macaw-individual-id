@@ -101,12 +101,16 @@ detect_device() {
 # -----------------------------------------------------------------------------
 # set_bacpipe_device DEVICE
 #
-# Write DEVICE into the settings.yaml file of the installed bacpipe package.
+# Write the settings this pipeline requires into the settings.yaml file of the
+# installed bacpipe package.
 #
 # CAUTION: bacpipe reads its device from this file. It does not detect CUDA.
 # The shipped value is 'cpu'. If you do not change this value, the torch models
 # run on CPU on a GPU node. The run is then much slower and gives no error
 # message.
+#
+# The function also turns off the pre-trained species classifier. See
+# BACPIPE_SETTINGS in src/01_extract_embeddings.py for why.
 #
 # The function keeps a backup of the original file.
 # -----------------------------------------------------------------------------
@@ -134,6 +138,8 @@ import re, sys
 path, device = sys.argv[1], sys.argv[2]
 text = open(path).read()
 new = re.sub(r"^\s*device\s*:.*$", f"device: '{device}'", text, flags=re.M)
+for key in ("run_pretrained_classifier", "save_raven_tables"):
+    new = re.sub(rf"^\s*{key}\s*:.*$", f"{key}: False", new, flags=re.M)
 if new == text:
     new = text.rstrip() + f"\ndevice: '{device}'\n"
 open(path, "w").write(new)

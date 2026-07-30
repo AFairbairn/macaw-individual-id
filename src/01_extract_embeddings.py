@@ -110,11 +110,42 @@ def audio_dir_for(species):
     )
 
 
+# The settings this pipeline requires from bacpipe, written into settings.yaml
+# inside the installed package before every model.
+#
+# device
+#     bacpipe does not detect CUDA. The shipped value is 'cpu', so without this
+#     the torch models run on CPU on a GPU node and give no error message.
+#
+# run_pretrained_classifier
+#     BirdNET ships a species classifier. bacpipe runs it after it has saved the
+#     embedding, writes a species prediction file, and builds an annotation
+#     table from it. On a single-time-bin file that code raises
+#     "index 1 is out of bounds for axis 0 with size 1", which bacpipe reports
+#     as "Error generating embeddings for <file>, skipping file" even though the
+#     embedding was already written.
+#
+#     Every clip here is shorter than the 3 second BirdNET segment, so every
+#     clip is a single time bin and the whole species is exposed to it.
+#
+#     This pipeline uses the embeddings and never the species predictions, so
+#     the classifier is turned off. The embedding model is a separate Keras
+#     model from the classifier head, so the embeddings do not change.
+#
+# save_raven_tables
+#     Raven tables are built from the classifier output. With no classifier
+#     there is nothing to write.
+BACPIPE_SETTINGS = {
+    "run_pretrained_classifier": "False",
+    "save_raven_tables": "False",
+}
+
+
 def set_bacpipe_device(device):
-    """Write the device into settings.yaml inside the bacpipe package.
+    """Write the settings this pipeline requires into the bacpipe package.
 
     The function runs before every model, so a reinstall of bacpipe between
-    models cannot leave the run on CPU.
+    models cannot leave the run on CPU or turn the classifier back on.
     """
     import re
     import bacpipe
@@ -122,8 +153,11 @@ def set_bacpipe_device(device):
     path = Path(bacpipe.__file__).parent / "settings.yaml"
     if not path.is_file():
         return
+
     text = path.read_text()
     updated = re.sub(r"(?m)^device:.*$", f"device: '{device}'", text)
+    for key, value in BACPIPE_SETTINGS.items():
+        updated = re.sub(rf"(?m)^{key}:.*$", f"{key}: {value}", updated)
     if updated != text:
         path.write_text(updated)
 
