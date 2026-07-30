@@ -97,13 +97,25 @@ def audio_dir_for(species):
     published audio. Two models fail on the shortest clips, so every model
     reads the same padded input. See the docstring of 00a_pad_audio.py.
 
-    The directory name becomes part of the output path, so bacpipe writes to
-    bacpipe_results/<species>/.
+    THE DIRECTORY NAME IS THE OUTPUT PATH
+        bacpipe writes to <main_results_dir>/<audio_dir.stem>/embeddings/. It
+        takes the name from the directory it is given and offers no way to set
+        the output path directly.
+
+        So this function returns the species directory, whose name is the
+        species code, and bacpipe writes to bacpipe_results/<species>/.
+
+        An earlier version returned the subdirectory below it, which is named
+        all_calls for aa and audio for ag. bacpipe then wrote to
+        bacpipe_results/all_calls/ and bacpipe_results/audio/, while
+        01b_verify_embeddings.py and 03_classify.py read
+        bacpipe_results/<species>/. The 13 bacpipe models were extracted and
+        then never found. Only the 2 speech models, whose output path this
+        file controls, were in the right place.
     """
     root = PADDED / "data" / species
-    for candidate in (root / "audio", root / "all_calls", root):
-        if candidate.exists() and any(candidate.rglob("*.wav")):
-            return candidate
+    if root.exists() and any(root.rglob("*.wav")):
+        return root
     raise SystemExit(
         f"No padded audio found for {species} under {PADDED}. "
         "Run: python src/00a_pad_audio.py"
@@ -264,8 +276,8 @@ def run_speech_models(audio_dir, device):
         print(f"=== speech: {model} ({len(files)} files, device={device}) ===", flush=True)
 
         out_dir = (
-            ROOT / "bacpipe_results" / audio_dir.parent.name / "embeddings"
-            / f"speech___{model}-{audio_dir.parent.name}"
+            ROOT / "bacpipe_results" / audio_dir.name / "embeddings"
+            / f"speech___{model}-{audio_dir.name}"
         )
 
         if out_dir.is_dir() and len(list(out_dir.rglob("*.npy"))) >= len(files):
