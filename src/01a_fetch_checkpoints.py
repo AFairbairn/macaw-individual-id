@@ -17,6 +17,24 @@ OUTPUT
     bacpipe/model_checkpoints/<model>/
         The weight files, below the repository root.
 
+WHY A DOWNLOAD IS NOT ENOUGH
+    A checkpoint that arrives damaged does not announce itself. bacpipe loads
+    it, raises, catches its own exception, and writes zero embeddings. The run
+    continues and reports success, and the loss appears three stages later in
+    01b_verify_embeddings.py.
+
+    So every file is checked here, at the point where it can still be fixed
+    cheaply.
+
+    sha256      Where config.yaml records a checksum for a file, the downloaded
+                file must match it. A checksum catches a truncated or altered
+                download, which a file size alone can miss.
+    open it     Every checkpoint is opened with the reader its format needs. A
+                torch checkpoint must load. A .keras file must be a valid zip
+                archive. This is the check that would have caught the BEATs
+                checkpoint that downloaded at the right size and then failed
+                with "PytorchStreamReader failed reading zip archive".
+
 WHY THIS SCRIPT EXISTS
     bacpipe downloads the weights of most of its models on first use. BirdNET
     is the exception. bacpipe ships no fetch step for it, so the model writes
@@ -38,7 +56,9 @@ RERUNNING
     Hugging Face skips a file that is already present and complete, so a second
     run costs one request for each file.
 """
+import hashlib
 import sys
+import zipfile
 from pathlib import Path
 
 import yaml
@@ -46,6 +66,42 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 TARGET = ROOT / "bacpipe" / "model_checkpoints"
+
+
+def sha256_of(path):
+    """Return the sha256 checksum of one file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def open_check(path):
+    """Open one checkpoint with the reader its format needs.
+
+    Return an empty string when the file opens, or a message when it does not.
+    A file that downloads at the correct size can still be unreadable.
+    """
+    suffix = path.suffix.lower()
+
+    if suffix in (".pt", ".pth", ".ckpt"):
+        try:
+            import torch
+        except ImportError:
+            return ""
+        try:
+            torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as error:
+            return f"{type(error).__name__}: {error}"
+        return ""
+
+    if suffix in (".keras", ".zip", ".h5"):
+        if suffix != ".h5" and not zipfile.is_zipfile(path):
+            return "not a valid zip archive"
+        return ""
+
+    return ""
 
 
 def main():
@@ -85,6 +141,32 @@ def main():
             print(f"  FAILED: {TARGET / name} holds no file after the download.")
             return 1
         print(f"  {len(present)} file(s) in {TARGET / name}")
+
+        # Every recorded checksum must match.
+        recorded = entry.get("sha256") or {}
+        for relative, expected in recorded.items():
+            path = TARGET / relative
+            if not path.exists():
+                print(f"  FAILED: {relative} is named in config.yaml and is absent.")
+                return 1
+            actual = sha256_of(path)
+            if actual != expected:
+                print(f"  FAILED: {relative} does not match its recorded checksum.")
+                print(f"    expected {expected}")
+                print(f"    found    {actual}")
+                print("    Delete the file and run this script again.")
+                return 1
+            print(f"  checksum ok: {relative}")
+
+        # Every checkpoint must open.
+        for path in present:
+            problem = open_check(path)
+            if problem:
+                print(f"  FAILED: {path.relative_to(TARGET)} does not open.")
+                print(f"    {problem}")
+                print("    The file is present but unusable. Delete it and run")
+                print("    this script again.")
+                return 1
 
     print()
     print("Every checkpoint is present.")

@@ -44,6 +44,24 @@ STAGE="${1:-auto}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
+# The interpreter. Many Linux distributions ship no 'python', only 'python3'.
+# Set PYTHON to choose a different one.
+PY_BIN="${PYTHON:-python3}"
+command -v "$PY_BIN" >/dev/null \
+  || { printf '\nERROR: %s not found. Set PYTHON to your interpreter.\n' "$PY_BIN" >&2; exit 1; }
+
+# One thread for the numerical libraries. A reduction runs in a different order
+# on a machine with a different core count, which changes the last digits of
+# every result and therefore every checksum in results/MANIFEST.csv. Section 7
+# of the README asks the reader to compare those checksums, so they have to be
+# reproducible across machines.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
+# Read and write UTF-8, whatever the locale of the batch system.
+export PYTHONUTF8=1
+
 mkdir -p logs results
 LOG="logs/run_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG") 2>&1
@@ -88,63 +106,20 @@ end_stage() {
 # -----------------------------------------------------------------------------
 detect_device() {
   if [[ -n "${FORCE_DEVICE:-}" ]]; then
-    echo "${FORCE_DEVICE}"
-    return
+    case "${FORCE_DEVICE}" in
+      cpu|cuda) echo "${FORCE_DEVICE}"; return ;;
+      *) die "FORCE_DEVICE is '${FORCE_DEVICE}'. Set it to 'cpu' or 'cuda'." ;;
+    esac
   fi
-  if python -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+  # A broken torch install must not read as 'no GPU'. Import first, and stop
+  # with the real message when the import fails.
+  "$PY_BIN" -c "import torch" \
+    || die "torch does not import. Create the environment with: pip install -r requirements.txt"
+  if "$PY_BIN" -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)"; then
     echo "cuda"
   else
     echo "cpu"
   fi
-}
-
-# -----------------------------------------------------------------------------
-# set_bacpipe_device DEVICE
-#
-# Write the settings this pipeline requires into the settings.yaml file of the
-# installed bacpipe package.
-#
-# CAUTION: bacpipe reads its device from this file. It does not detect CUDA.
-# The shipped value is 'cpu'. If you do not change this value, the torch models
-# run on CPU on a GPU node. The run is then much slower and gives no error
-# message.
-#
-# The function also turns off the pre-trained species classifier. See
-# BACPIPE_SETTINGS in src/01_extract_embeddings.py for why.
-#
-# The function keeps a backup of the original file.
-# -----------------------------------------------------------------------------
-set_bacpipe_device() {
-  local dev="$1"
-  local yml
-
-  yml="$(python - <<'PY' 2>/dev/null || true
-import importlib.util, pathlib
-spec = importlib.util.find_spec("bacpipe")
-print(pathlib.Path(spec.origin).parent / "settings.yaml" if spec and spec.origin else "")
-PY
-)"
-
-  if [[ -z "$yml" || ! -f "$yml" ]]; then
-    echo "  Note: bacpipe settings.yaml not found."
-    echo "  01_extract_embeddings.py sets the device for each model instead."
-    return
-  fi
-
-  cp "$yml" "${yml}.bak_$(date +%Y%m%d)" 2>/dev/null || true
-
-  python - "$yml" "$dev" <<'PY'
-import re, sys
-path, device = sys.argv[1], sys.argv[2]
-text = open(path).read()
-new = re.sub(r"^\s*device\s*:.*$", f"device: '{device}'", text, flags=re.M)
-for key in ("run_pretrained_classifier", "save_raven_tables"):
-    new = re.sub(rf"^\s*{key}\s*:.*$", f"{key}: False", new, flags=re.M)
-if new == text:
-    new = text.rstrip() + f"\ndevice: '{device}'\n"
-open(path, "w").write(new)
-print(f"  bacpipe settings.yaml: device = '{device}'")
-PY
 }
 
 # -----------------------------------------------------------------------------
@@ -168,10 +143,10 @@ fi
 
 # The pipeline needs Python 3.11 or newer, because bacpipe publishes no build
 # for 3.10. Check this before the imports, so the message names the real cause.
-python -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" \
-  || die "Python 3.11 or newer is required. This is $(python -V 2>&1). See README section 1.1."
+"$PY_BIN" -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" \
+  || die "Python 3.11 or newer is required. This is $("$PY_BIN" -V 2>&1). See README section 1.1."
 
-python -c "import numpy, pandas, sklearn, torch, librosa, yaml" \
+"$PY_BIN" -c "import numpy, pandas, sklearn, torch, librosa, yaml" \
   || die "The environment is incomplete. Create it with: pip install -r requirements.txt"
 
 # -----------------------------------------------------------------------------
@@ -186,14 +161,14 @@ python -c "import numpy, pandas, sklearn, torch, librosa, yaml" \
 # -----------------------------------------------------------------------------
 if [[ -d environment.lock ]]; then
   if [[ "${STRICT_ENV:-0}" == "1" ]]; then
-    python src/08_freeze_environment.py verify --strict \
+    "$PY_BIN" src/08_freeze_environment.py verify --strict \
       || die "The environment does not match environment.lock. See the output above."
   else
-    python src/08_freeze_environment.py verify || true
+    "$PY_BIN" src/08_freeze_environment.py verify
   fi
 else
   echo "  Note: no environment.lock found."
-  echo "  To record this environment, run: python src/08_freeze_environment.py freeze"
+  echo "  To record this environment, run: $PY_BIN src/08_freeze_environment.py freeze"
 fi
 
 # -----------------------------------------------------------------------------
@@ -226,7 +201,7 @@ begin_stage "STAGE 0 of 5   Master metadata"
 # =============================================================================
 # The master table is the single source of truth for the bird identity and the
 # recording_id of every clip. Every later stage reads it. Build it first.
-python src/00_build_master_metadata.py
+"$PY_BIN" src/00_build_master_metadata.py
 
 for sp in aa ag; do
   [[ -f "data/${sp}/metadata/${sp}_master.csv" ]] \
@@ -235,7 +210,7 @@ done
 
 # Two models fail on the shortest clips. Every model reads the padded copy, so
 # the input is the same for all of them. See src/00a_pad_audio.py.
-python src/00a_pad_audio.py \
+"$PY_BIN" src/00a_pad_audio.py \
   || die "The audio could not be padded. See the output above."
 end_stage
 
@@ -243,21 +218,20 @@ end_stage
 if [[ "$STAGE" == "all" || "$STAGE" == "embed" ]]; then
   begin_stage "STAGE 1 of 5   Embedding extraction   [GPU, resumable]"
 # =============================================================================
-  set_bacpipe_device "$DEVICE"
 
   # bacpipe does not fetch the BirdNET checkpoint. Without it that model writes
   # zero embeddings and the log looks normal.
-  python src/01a_fetch_checkpoints.py \
+  "$PY_BIN" src/01a_fetch_checkpoints.py \
     || die "A model checkpoint could not be downloaded. See the output above."
 
   for sp in aa ag; do
-    python src/01_extract_embeddings.py --species "$sp" --device "$DEVICE"
+    "$PY_BIN" src/01_extract_embeddings.py --species "$sp" --device "$DEVICE" --clear
   done
 
   # CAUTION: bacpipe prints many tracebacks after it writes the embeddings.
   # Those messages come from a dashboard step that this pipeline does not use.
   # Do not use the absence of tracebacks to confirm success. Count the files.
-  python src/01b_verify_embeddings.py || die "The embedding count check failed."
+  "$PY_BIN" src/01b_verify_embeddings.py || die "The embedding count check failed."
   end_stage
 else
   say "STAGE 1 of 5   Skipped. Using existing embeddings."
@@ -273,7 +247,7 @@ begin_stage "STAGE 2 of 5   MFCC baseline   [CPU]"
 # =============================================================================
 # The MFCC baseline is the classical floor for the benchmark. It writes its
 # features in the bacpipe layout, so stage 3 treats it as three more models.
-python src/02_extract_mfcc.py
+"$PY_BIN" src/02_extract_mfcc.py
 end_stage
 
 # =============================================================================
@@ -282,7 +256,7 @@ begin_stage "STAGE 3 of 5   Classification, verification, clustering   [CPU]"
 # This stage appends one row for each model and skips completed work. To rerun
 # one model, delete its row from results/<species>/rows.csv.
 for sp in aa ag; do
-  python src/03_classify.py --species "$sp"
+  "$PY_BIN" src/03_classify.py --species "$sp"
 done
 end_stage
 
@@ -293,8 +267,11 @@ begin_stage "STAGE 4 of 5   Metric learning   [CPU bound]"
 # stops in the middle of a subset, the work for that subset is lost. Run this
 # script inside tmux or screen, or submit it as a batch job.
 for sp in aa ag; do
-  python src/04_metric_learning.py \
-    --species "$sp" --set single --device "$DEVICE" --dump-embeddings
+  # CPU, not "$DEVICE". The head is one small network on fewer than 1,100
+  # vectors, and CUDA kernels are not deterministic, so a GPU run gives
+  # different numbers on every machine and between two runs on one machine.
+  "$PY_BIN" src/04_metric_learning.py \
+    --species "$sp" --set single --device cpu --dump-embeddings
 done
 end_stage
 
@@ -303,18 +280,21 @@ begin_stage "STAGE 5 of 5   Diagnostics and manifest   [CPU]"
 # =============================================================================
 # Domain shift, within call type, kinship, and split structure. Figures are made
 # separately from these tables.
-python src/05_diagnostics.py
+"$PY_BIN" src/05_diagnostics.py
 
 # The leakage experiment. Demonstrates the mechanism within one species, with
 # birds, room, repertoire and calls per bird all held constant.
-python src/06_leakage_experiment.py
+"$PY_BIN" src/06_leakage_experiment.py
 
 # The supplementary bout comparison. It runs only when the supplementary audio
 # is present, and it never enters a main result.
-python src/09_supplementary_bouts.py
+# This comparison never enters a main result, and the supplementary audio is
+# published separately, so a machine without it must still finish the run.
+"$PY_BIN" src/09_supplementary_bouts.py \
+  || say "The supplementary bout comparison did not run. No main result uses it."
 
 # An md5 checksum for every output, so a rerun can be diffed.
-python src/07_manifest.py
+"$PY_BIN" src/07_manifest.py
 end_stage
 
 say "COMPLETE"

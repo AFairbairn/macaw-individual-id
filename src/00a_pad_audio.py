@@ -85,17 +85,40 @@ def source_path(relative):
 
 
 def pad_one(source, target, minimum_samples):
-    """Write one padded file. Return the number of samples that were added."""
+    """Write one padded file. Return the number of samples that were added.
+
+    The written file keeps the sample format of the source. soundfile writes
+    16 bit by default, so a file that is written and a file that is copied
+    would otherwise differ in bit depth. Clip length decides which branch a
+    clip takes, and mean clip length differs between the two species, so that
+    difference would sit inside the species comparison.
+
+    The file is written to a temporary name and then moved into place. A run
+    that stops in the middle therefore leaves no half-written file for the next
+    run to accept as complete.
+    """
+    info = sf.info(source)
     audio, rate = sf.read(source, always_2d=True)
     needed = minimum_samples(rate) - len(audio)
     target.parent.mkdir(parents=True, exist_ok=True)
+    # The temporary name keeps the extension. soundfile reads the format from
+    # it, and the format is passed as well, so neither depends on the other.
+    temporary = target.with_name(f"{target.stem}.part{target.suffix}")
 
     if needed <= 0:
-        shutil.copyfile(source, target)
+        shutil.copyfile(source, temporary)
+        os.replace(temporary, target)
         return 0
 
     silence = np.zeros((needed, audio.shape[1]), dtype=audio.dtype)
-    sf.write(target, np.concatenate([audio, silence]), rate)
+    sf.write(
+        temporary,
+        np.concatenate([audio, silence]),
+        rate,
+        format=info.format,
+        subtype=info.subtype,
+    )
+    os.replace(temporary, target)
     return needed
 
 
@@ -123,7 +146,7 @@ def main():
 
         for relative in table["rel_audio_path"]:
             target = PADDED / relative
-            if target.exists():
+            if target.exists() and target.stat().st_size > 0:
                 skipped += 1
                 continue
 

@@ -180,7 +180,33 @@ def set_bacpipe_device(device):
         path.write_text(updated)
 
 
-def run_bacpipe_models(audio_dir, device, wanted=None):
+def clear_model_output(audio_dir, model):
+    """Delete the existing output of one model, before it is recomputed.
+
+    bacpipe tries to continue a partly filled output directory. That path
+    carries an off-by-one that desynchronises its file list from its per-file
+    bin counts, and it fails with a length mismatch. So a model that is asked
+    for by name starts from an empty directory.
+
+    Only the named model is touched. Every other model is left alone, which is
+    the point of asking for one by name.
+    """
+    import shutil
+
+    parent = ROOT / "bacpipe_results" / audio_dir.name / "embeddings"
+    if not parent.is_dir():
+        return
+
+    for directory in sorted(parent.iterdir()):
+        if not directory.is_dir() or "___" not in directory.name:
+            continue
+        if directory.name.split("___")[1].rsplit("-", 1)[0] != model:
+            continue
+        shutil.rmtree(directory)
+        print(f"  removed the previous output: {directory.name}", flush=True)
+
+
+def run_bacpipe_models(audio_dir, device, wanted=None, clear=False):
     """Compute the embeddings of the bacpipe models.
 
     When wanted is set, only those models run. Everything else is left alone,
@@ -189,6 +215,8 @@ def run_bacpipe_models(audio_dir, device, wanted=None):
     import bacpipe
 
     for model in [m for m in BACPIPE_MODELS if wanted is None or m in wanted]:
+        if clear:
+            clear_model_output(audio_dir, model)
         model_device = "cpu" if model in CPU_ONLY_MODELS else device
         set_bacpipe_device(model_device)
         print(f"=== bacpipe: {model} (device={model_device}) ===", flush=True)
@@ -210,10 +238,24 @@ def run_bacpipe_models(audio_dir, device, wanted=None):
             bacpipe.play()
         except Exception as error:
             # bacpipe runs an evaluation step after it writes the embeddings.
-            # That step fails when dim_reduction_model is "None". The embeddings
-            # are already on disk at this point. Catching the error here also
-            # stops one broken model from ending the whole run.
-            print(f"  ({model}: post-embedding step skipped: {type(error).__name__})", flush=True)
+            # That step fails when dim_reduction_model is "None", and the
+            # embeddings are already on disk when it does. So one model is not
+            # allowed to end the run.
+            #
+            # PRINT THE WHOLE THING. An earlier version printed the exception
+            # type alone. A disk that filled up, a checkpoint that would not
+            # load and a harmless evaluation step all looked identical, and the
+            # run carried on and reported success in every case. The message
+            # and the traceback are the difference between a minute and an hour.
+            import traceback
+
+            print(f"  {model}: bacpipe raised {type(error).__name__}: {error}", flush=True)
+            traceback.print_exc()
+            print(
+                f"  {model}: continuing. 01b_verify_embeddings.py counts the "
+                "files and fails the run if this model wrote nothing.",
+                flush=True,
+            )
 
 
 def load_audio_16k(path, device):
@@ -274,7 +316,7 @@ def build_speech_encoder(model, device):
     return encode
 
 
-def run_speech_models(audio_dir, device, wanted=None):
+def run_speech_models(audio_dir, device, wanted=None, clear=False):
     """Compute the embeddings of the 2 speech models.
 
     The output path matches the bacpipe layout, so 03_classify.py reads all 15
@@ -283,6 +325,8 @@ def run_speech_models(audio_dir, device, wanted=None):
     files = sorted(audio_dir.rglob("*.wav"))
 
     for model in [m for m in SPEECH_MODELS if wanted is None or m in wanted]:
+        if clear:
+            clear_model_output(audio_dir, model)
         print(f"=== speech: {model} ({len(files)} files, device={device}) ===", flush=True)
 
         out_dir = (
@@ -324,6 +368,16 @@ def main():
         help="'cuda' or 'cpu'. The script detects the device when this is not set.",
     )
     parser.add_argument(
+        "--clear",
+        action="store_true",
+        help=(
+            "Delete the existing output of every model this run computes, "
+            "before it computes it. run_all.sh passes this on the full path. "
+            "bacpipe tries to continue a partly filled directory, and that "
+            "path is unreliable."
+        ),
+    )
+    parser.add_argument(
         "--models",
         default="",
         help=(
@@ -361,8 +415,12 @@ def main():
     if wanted:
         print(f"Models:  {', '.join(wanted)}", flush=True)
 
-    run_bacpipe_models(audio_dir, device, wanted)
-    run_speech_models(audio_dir, device, wanted)
+    # A model asked for by name is always recomputed from nothing. Otherwise
+    # --clear decides.
+    clear = args.clear or wanted is not None
+
+    run_bacpipe_models(audio_dir, device, wanted, clear)
+    run_speech_models(audio_dir, device, wanted, clear)
 
     print("Extraction finished. Now run src/01b_verify_embeddings.py.", flush=True)
 

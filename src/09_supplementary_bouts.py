@@ -152,8 +152,14 @@ def main():
             )
 
     if not rows:
+        # Return 0. This comparison never enters a main result, and the
+        # supplementary audio is published separately from the main dataset, so
+        # a machine without it must still finish the run. The message names the
+        # file that is needed.
         print("No model produced a usable comparison.")
-        return 1
+        print(f"The bout metadata is {BOUTS_MASTER}.")
+        print("Download the supplementary set to run this comparison.")
+        return 0
 
     out_dir = ROOT / "results/supplementary"
     out_dir.mkdir(parents=True, exist_ok=True)

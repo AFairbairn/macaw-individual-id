@@ -213,6 +213,14 @@ checkpoints:
     patterns:
       - birdnet/birdnetv2.4.keras
       - birdnet/BirdNET_Preprocessor/*
+  beats:
+    repo_id: vskode/bacpipe_models
+    repo_type: dataset
+    patterns:
+      - beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt1.pt
+    sha256:
+      beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt1.pt:
+        7f9362028ac6e5c049e8dc314d87e90e4f82a15a8e472deb56af55d7f9b34d6a
 
 mfcc:
   sample_rate: 16000
