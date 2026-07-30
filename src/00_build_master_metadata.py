@@ -66,12 +66,20 @@ PRIVACY
     family_1. The parent identifiers themselves are discarded.
 """
 import argparse
+import hashlib
 import os
 import sys
 from pathlib import Path
 
 import pandas as pd
 import yaml
+
+try:
+    import soundfile
+except ImportError:
+    # The header check is skipped where soundfile is absent. The size and
+    # checksum checks still run, and they catch the truncated-file case.
+    soundfile = None
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
@@ -100,6 +108,30 @@ EXPECTED = {
     "aa": {"clips": 480, "single": 480, "birds": 8, "recordings": 211},
     "ag": {"clips": 1060, "single": 1060, "birds": 16, "recordings": 74},
 }
+
+
+def load_checksums():
+    """Return the recorded md5 of every file, from the data package.
+
+    The data package ships CHECKSUMS.csv beside its data directory. Where that
+    file is absent, the function returns an empty mapping and the checksum
+    comparison is skipped.
+    """
+    for candidate in (DATA.parent / "CHECKSUMS.csv", DATA / "CHECKSUMS.csv"):
+        if candidate.exists():
+            table = pd.read_csv(candidate, dtype=str, header=None,
+                                names=["path", "bytes", "md5"])
+            return dict(zip(table["path"], table["md5"]))
+    return {}
+
+
+def md5_of(path):
+    """Return the md5 checksum of one file."""
+    digest = hashlib.md5()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def master_path(species):
@@ -148,17 +180,60 @@ def validate(species):
     if n_birds != expected["birds"]:
         problems.append(f"{n_birds} birds, but {expected['birds']} were expected")
 
-    # Every clip must have an audio file. A missing file means the dataset is
-    # incomplete, which would silently reduce the sample size of a later stage.
-    absent = 0
+    # Every clip must have an audio file, and that file must hold audio. A
+    # missing file reduces the sample size of a later stage. A file that is
+    # present but empty is worse, because it survives an existence check and
+    # then stops the run in the middle of stage 0 or stage 1.
+    #
+    # This happened. One of 1541 files was truncated to zero bytes while the
+    # data package was being copied, and it was found by a crash three stages
+    # later rather than by this check.
+    absent, empty, corrupt, wrong_checksum = [], [], [], []
+    checksums = load_checksums()
+
     for relative in table["rel_audio_path"]:
         # rel_audio_path starts with "data/", so it resolves from the parent
         # of the data directory. Both roots are tried, so the check works
         # whether PARROT_DATA points at the dataset or at its parent.
-        if not (DATA.parent / relative).exists() and not (DATA / relative).exists():
-            absent += 1
-    if absent:
-        problems.append(f"{absent} of {len(table)} audio file(s) not found under {DATA}")
+        path = None
+        for candidate in (DATA.parent / relative, DATA / relative):
+            if candidate.exists():
+                path = candidate
+                break
+
+        if path is None:
+            absent.append(relative)
+            continue
+
+        if path.stat().st_size == 0:
+            empty.append(relative)
+            continue
+
+        if soundfile is not None:
+            try:
+                frames = soundfile.info(path).frames
+            except Exception:
+                corrupt.append(relative)
+                continue
+            if frames == 0:
+                empty.append(relative)
+                continue
+
+        # The data package ships CHECKSUMS.csv. Where it is available, compare
+        # against it. A checksum catches a file that was changed after the
+        # package was built, which no other check here can see.
+        recorded = checksums.get(relative)
+        if recorded and md5_of(path) != recorded:
+            wrong_checksum.append(relative)
+
+    for label, found in (("not found", absent), ("empty", empty),
+                         ("unreadable", corrupt), ("changed since CHECKSUMS.csv",
+                                                   wrong_checksum)):
+        if found:
+            problems.append(
+                f"{len(found)} of {len(table)} audio file(s) {label}, "
+                f"first: {found[0]}"
+            )
 
     # A clip marked as resolved must carry a real recording_id.
     resolved = table[table["session_known"] == "1"]
