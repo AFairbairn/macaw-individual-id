@@ -17,7 +17,7 @@ INPUT
 OUTPUT
     results/MANIFEST.csv
         One row for each output file, with these columns:
-        path, bytes, md5, modified_utc
+        path, bytes, md5
 
 HOW TO USE THE MANIFEST
     Compare the manifest of two runs:
@@ -79,25 +79,23 @@ def main():
     if not files:
         raise SystemExit(f"{RESULTS} holds no result files.")
 
+    # The manifest holds the path, the size and the checksum, and nothing that
+    # changes by itself. An earlier version carried the modification time, so
+    # every line of a rerun differed from every line of the run before it and
+    # the comparison below reported that every file had changed.
     rows = []
     for path in files:
         stat = path.stat()
-        modified = datetime.datetime.fromtimestamp(
-            stat.st_mtime, datetime.timezone.utc
-        ).isoformat(timespec="seconds")
         rows.append(
             {
                 "path": path.relative_to(RESULTS).as_posix(),
                 "bytes": stat.st_size,
                 "md5": md5_of(path),
-                "modified_utc": modified,
             }
         )
 
-    with open(MANIFEST, "w", newline="") as handle:
-        writer = csv.DictWriter(
-            handle, fieldnames=["path", "bytes", "md5", "modified_utc"]
-        )
+    with open(MANIFEST, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["path", "bytes", "md5"])
         writer.writeheader()
         writer.writerows(rows)
 

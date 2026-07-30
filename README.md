@@ -28,7 +28,7 @@ pip install -U pip
 pip install -r requirements.txt
 ```
 
-`requirements.txt` names four packages. bacpipe pins the rest of the stack, and it pulls
+`requirements.txt` names five packages. bacpipe pins the rest of the stack, and it pulls
 torch, torchaudio, transformers, librosa, numpy, pandas, scipy, scikit-learn and PyYAML with
 it.
 
@@ -42,6 +42,9 @@ uv venv --python 3.11 .venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
+
+Stage 1 downloads model weights from `huggingface.co` the first time it runs, so that
+machine needs network access. Later runs read the cache. Stages 2 to 5 need no network.
 
 To record the environment that produced a set of results, run this once, in the activated
 environment on the machine that produced them.
@@ -67,6 +70,15 @@ export PARROT_DATA=/path/to/the/dataset
 If `PARROT_DATA` is not set, the pipeline reads `./data`. That directory holds the master
 metadata tables only.
 
+The archive holds the audio at these two paths, and the pipeline resolves every clip from
+them. Point `PARROT_DATA` either at the archive root or at the `data` directory inside it.
+Both work.
+
+```
+data/aa/all_calls/single/*.wav
+data/ag/audio/single/<bird>/<call_type>/*.wav
+```
+
 The master metadata tables are not part of the archive. They are curated, they are versioned
 with this code, and every stage reads them from `data/<sp>/metadata/` in the repository. Only
 the audio is read from `$PARROT_DATA`. If the archive holds its own copy of a master table,
@@ -76,7 +88,7 @@ The archive holds three things.
 
 | What | Where it goes | Which path needs it |
 |---|---|---|
-| The audio | `$PARROT_DATA` | `./run_all.sh all` |
+| The audio | `$PARROT_DATA` | every path. Stage 0 pads it and stage 2 reads it. |
 | The 15 model embeddings | `bacpipe_results/` in the repository | `./run_all.sh analyse` |
 | The MFCC features | `mfcc_results/` in the repository | `./run_all.sh analyse` |
 
@@ -111,7 +123,8 @@ Note: Three groups of models always run on CPU, even on a GPU node.
 ## 2. How to run
 
 To reproduce every result table from the published embeddings, run the analysis path. It
-runs on CPU.
+needs no GPU. It still needs the audio, because stage 0 pads every clip and stage 2 computes
+the MFCC baseline from it.
 
 ```bash
 ./run_all.sh analyse
@@ -129,8 +142,18 @@ To extract the embeddings and stop there, run `./run_all.sh embed`.
 The outputs go to `results/`. Each stage prints its duration when it finishes, and the run
 ends with a table of all of them.
 
-Every stage skips work it has already done, so a rerun after a failure continues from the
-point it stopped.
+Stage 1 and stage 3 skip work they have already done, so a rerun after a failure continues
+from the point it stopped. Stage 1 skips a model that wrote a file for every clip, and stage 3
+skips a model that already has a row. Stages 0, 2, 4 and 5 recompute in full every time.
+
+To recompute one model of stage 1 on its own:
+
+```bash
+python src/01_extract_embeddings.py --species aa --models birdnet --device cuda
+```
+
+That deletes the output of the named model first, then rebuilds it. Every other model is left
+alone.
 
 The pipeline detects the device. To override the detected device, set `FORCE_DEVICE`.
 
@@ -167,7 +190,7 @@ The rules that govern how this repository is written are in `docs/WRITING_STANDA
 
 ## 4. What the pipeline does
 
-The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
+The pipeline has six stages, numbered 0 to 5. Stage 1 is the only stage that uses a GPU.
 
 | Stage | Script | Output | Hardware |
 |---|---|---|---|
@@ -176,7 +199,7 @@ The pipeline has six stages. Stage 1 is the only stage that uses a GPU.
 | 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU |
 | 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU |
 | 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU |
-| 5 | `05_diagnostics.py`, `06_leakage_experiment.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/diagnostics/` | CPU |
+| 5 | `05_diagnostics.py`, `06_leakage_experiment.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/diagnostics/`, `results/supplementary/`, `results/MANIFEST.csv` | CPU |
 
 Stage 0 builds the master metadata table. This table is the single source of truth for the
 bird identity and the `recording_id` of every clip. Every later stage reads it.
@@ -189,7 +212,7 @@ bird identity and the `recording_id` of every clip. Every later stage reads it.
 macaw-individual-id/
 ├── README.md                     This file.
 ├── LICENSE                       MIT.
-├── requirements.txt              The four direct dependencies.
+├── requirements.txt              The five direct dependencies.
 ├── config.yaml                   Every analysis choice, in one file.
 ├── run_all.sh                    The single entry point.
 ├── docs/
@@ -210,6 +233,8 @@ macaw-individual-id/
 │   ├── 08_freeze_environment.py
 │   └── 09_supplementary_bouts.py
 ├── tests/
+│   ├── test_output_paths.py      Asserts that every model writes where the stages read.
+│   ├── test_padding.py           Asserts that padding changes the length and nothing else.
 │   ├── test_splits.py            Asserts that the split does not leak.
 │   └── test_writing.py           Asserts the writing standard.
 ├── data/<sp>/metadata/           The master tables. Tracked here.
@@ -265,15 +290,17 @@ would come from the acoustic unit rather than from the biology.
 
 ### 6.4 The metrics
 
-The pipeline reports five metrics for every model.
+The pipeline reports six metrics for every model.
 
-1. **Linear probe accuracy.** A logistic regression classifier on the frozen embeddings.
-2. **Cosine nearest-centroid accuracy.** One mean template for each bird. This metric matches
+1. **Macro F1.** The primary metric. `ag` is not balanced, and macro F1 gives every bird the
+   same weight whatever its number of calls. Column `macro_f1_byrec`.
+2. **Linear probe accuracy.** A logistic regression classifier on the frozen embeddings.
+3. **Cosine nearest-centroid accuracy.** One mean template for each bird. This metric matches
    the enrolment case.
-3. **Verification EER and AUROC.** Positive pairs are the same bird in different recordings.
+4. **Verification EER and AUROC.** Positive pairs are the same bird in different recordings.
    This metric generalises to the open-set case.
-4. **Clustering.** KMeans, affinity propagation, and HDBSCAN. See Section 6.6.
-5. **Encounter accuracy.** See Section 6.5.
+5. **Clustering.** KMeans, given the true number of birds. See Section 6.6.
+6. **Encounter accuracy.** See Section 6.5.
 
 Caution: `ag` is not balanced. The number of calls for each bird runs from 41 to 108. Report
 the majority-class baseline (0.108 for `all`, 0.111 for `lab`) next to `1/n_birds`. If you
@@ -295,17 +322,20 @@ The assumption is necessary here, because 14 of 74 `ag` recordings and 2 of 211 
 recordings hold calls from two birds. To pool all calls in those recordings would average two
 birds into one query.
 
-`03_classify.py` records the number of multi-bird recordings in every result row, so the
-assumption stays visible in the output.
+`00_build_master_metadata.py` reports the number of multi-bird recordings for each species
+when it validates the tables, and `tests/test_splits.py` asserts the two counts above.
 
 ### 6.6 Clustering metrics
 
-The pipeline reports NMI, AMI, ARI, and the inferred number of clusters.
+KMeans runs with the true number of birds. The pipeline reports four columns:
+`cluster_ari`, `cluster_ami` and `cluster_nmi` against the bird, and `cluster_ari_recording`
+against the recording.
 
-Caution: Do not report NMI on its own. NMI increases as the number of clusters increases.
-Affinity propagation infers 37 to 85 clusters for 8 to 16 birds, so its NMI is higher than
-the NMI of KMeans while its ARI is lower. Always report NMI next to AMI or ARI, and next to
-the inferred number of clusters.
+Caution: Do not report NMI on its own. NMI rises as the number of clusters rises, so it
+rewards a method that splits the data more finely. Report it next to AMI and ARI.
+
+`cluster_ari_recording` is the control. A model that clusters by recording rather than by
+bird scores highly on it, and that is the failure this study is about.
 
 ---
 
@@ -321,6 +351,10 @@ diff <(sort results/MANIFEST.csv) <(sort results_previous/MANIFEST.csv)
 
 If the two manifests match, the results are identical. If a line differs, that file changed.
 
+The manifest holds the path, the size and the md5 of every output, so two runs of the same
+code on the same data produce the same file. Save `results/MANIFEST.csv` under another name
+before a rerun, and compare against that.
+
 To confirm that the split does not leak, run the tests.
 
 ```bash
@@ -332,6 +366,10 @@ test set, for every species and every subset.
 
 `tests/test_writing.py` asserts that every comment, docstring and documentation file follows
 `docs/WRITING_STANDARD.md`.
+
+`tests/test_output_paths.py` asserts that stage 1 writes to the directory that stage 1b and
+stage 3 read. `tests/test_padding.py` asserts that a padded clip keeps the sample rate,
+channel count and sample format of its source.
 
 ---
 
@@ -363,10 +401,11 @@ the species comparison.
 Report `min_seconds` in the methods. It is a preprocessing choice, not a property of the
 recordings.
 
-### 8.3 bacpipe does not fetch the BirdNET checkpoint
+### 8.3 bacpipe does not fetch the BirdNET or the BEATs checkpoint
 
-bacpipe downloads the weights of most of its models on first use. BirdNET is the exception.
-Without the checkpoint that model writes zero embeddings, and the log looks normal.
+bacpipe downloads the weights of most of its models on first use. BirdNET and BEATs are the
+exceptions. Without the checkpoint the model writes zero embeddings, and the log looks
+normal.
 
 `src/01a_fetch_checkpoints.py` downloads it into `bacpipe/model_checkpoints`, which is where
 bacpipe looks. `run_all.sh` runs it before stage 1 and stops the run if the download fails.

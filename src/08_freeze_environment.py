@@ -54,6 +54,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -69,7 +70,8 @@ CHUNK_BYTES = 1 << 20  # Read 1 MiB at a time, so large weight files fit in memo
 
 # File types that hold model weights. bacpipe stores weights under several
 # names, so the script matches on the suffix rather than on the file name.
-WEIGHT_SUFFIXES = {".pt", ".pth", ".ckpt", ".bin", ".safetensors", ".tflite", ".pb", ".h5", ".onnx"}
+WEIGHT_SUFFIXES = {".pt", ".pth", ".ckpt", ".bin", ".safetensors", ".tflite",
+                   ".pb", ".h5", ".onnx", ".keras"}
 
 # The smallest file that is treated as a weight file. A smaller file is usually
 # a config file or a tokenizer, not a weight.
@@ -105,21 +107,31 @@ def weight_search_paths():
     directory is skipped, not an error.
     """
     home = Path.home()
+    cache = Path(os.environ.get("XDG_CACHE_HOME", home / ".cache"))
+
+    # A cluster commonly redirects these caches to scratch. Read the variables
+    # the libraries themselves read, so the record covers the weights that were
+    # actually used rather than an empty default directory.
     candidates = [
-        home / ".cache/huggingface",
-        home / ".cache/torch",
-        home / ".cache/kagglehub",
-        home / ".cache/tfhub_modules",
-        home / ".keras",
-        ROOT / "model_weights",
+        Path(os.environ.get("HUGGINGFACE_HUB_CACHE",
+                            os.environ.get("HF_HOME", cache / "huggingface"))),
+        Path(os.environ.get("TORCH_HOME", cache / "torch")),
+        cache / "kagglehub",
+        cache / "tfhub_modules",
+        Path(os.environ.get("KERAS_HOME", home / ".keras")),
+        # The checkpoints this pipeline downloads itself. These are the two the
+        # project pins a checksum for, so they are the ones the record must
+        # cover.
+        ROOT / "bacpipe" / "model_checkpoints",
     ]
 
     # Add the directory of the installed bacpipe package, if it is present.
     try:
         import bacpipe  # noqa: F401
         candidates.append(Path(bacpipe.__file__).parent)
-    except Exception:
-        pass
+    except Exception as error:
+        print(f"  bacpipe did not import, so its directory is not searched. "
+              f"{type(error).__name__}: {error}")
 
     return [p for p in candidates if p.exists()]
 

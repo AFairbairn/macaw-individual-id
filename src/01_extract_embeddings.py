@@ -343,7 +343,8 @@ def run_speech_models(audio_dir, device, wanted=None, clear=False):
         try:
             encode = build_speech_encoder(model, device)
         except Exception as error:
-            print(f"  {model}: the model did not load, skipped ({type(error).__name__})", flush=True)
+            print(f"  {model}: the model did not load, skipped. "
+                  f"{type(error).__name__}: {error}", flush=True)
             continue
 
         for index, path in enumerate(files, start=1):

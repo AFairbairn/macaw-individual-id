@@ -212,8 +212,10 @@ def validate(species):
         if soundfile is not None:
             try:
                 frames = soundfile.info(path).frames
-            except Exception:
-                corrupt.append(relative)
+            except Exception as error:
+                # Carry the message. A permission error, an unsupported codec
+                # and a truncated file need different fixes.
+                corrupt.append(f"{relative}  ({type(error).__name__}: {error})")
                 continue
             if frames == 0:
                 empty.append(relative)

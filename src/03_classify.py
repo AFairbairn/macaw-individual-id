@@ -175,7 +175,11 @@ def load_embeddings(model_dir, model, master, single_stems):
 
         try:
             matrix = np.atleast_2d(np.load(path))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
+            # A clip that is dropped here reduces the sample size of this model
+            # against every other. Say which clip, and why.
+            print(f"  {model}: {path.name} did not load, so this clip is not "
+                  f"scored. {type(error).__name__}: {error}", flush=True)
             continue
         if matrix.ndim != 2:
             continue
