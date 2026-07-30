@@ -103,8 +103,15 @@ EXPECTED = {
 
 
 def master_path(species):
-    """Return the path of the master table of one species."""
-    return DATA / f"{species}/metadata/{species}_master.csv"
+    """Return the path of the master table of one species.
+
+    The table is read from the repository, not from PARROT_DATA. It is curated
+    metadata and it is versioned with this code. Only the audio comes from
+    PARROT_DATA. An earlier version read the table from PARROT_DATA, which let
+    the copy in the data package drift away from the copy in the repository,
+    and stage 2 and the tests already read the repository copy.
+    """
+    return ROOT / f"data/{species}/metadata/{species}_master.csv"
 
 
 def validate(species):

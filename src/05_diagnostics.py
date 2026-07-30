@@ -174,7 +174,7 @@ def load_clips(species, model):
     vector for each clip. Without that step, a model that returns several
     windows would carry more weight than a model that returns one.
     """
-    master_path = DATA / f"{species}/metadata/{species}_master.csv"
+    master_path = ROOT / f"data/{species}/metadata/{species}_master.csv"
     master = pd.read_csv(master_path, dtype=str)
     records = {row["original_stem"]: row for _, row in master.iterrows()}
 
@@ -453,7 +453,7 @@ def split_structure(species):
     expected_siblings_in_train does not saturate and does track the deltas. It
     is the one to report.
     """
-    path = DATA / f"{species}/metadata/{species}_master.csv"
+    path = ROOT / f"data/{species}/metadata/{species}_master.csv"
     table = pd.read_csv(path, dtype=str)
     table = table[(table["kind"] == "single") & (table["session_known"] == "1")]
 

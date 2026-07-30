@@ -48,7 +48,7 @@ EXPECTED_MODEL_COUNT = 15
 
 def expected_stems(species):
     """Return the clip stems that the master table lists for one species."""
-    path = DATA / f"{species}/metadata/{species}_master.csv"
+    path = ROOT / f"data/{species}/metadata/{species}_master.csv"
     if not path.exists():
         raise SystemExit(f"{path} not found. Run src/00_build_master_metadata.py first.")
     table = pd.read_csv(path, dtype=str)

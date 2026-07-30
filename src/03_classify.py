@@ -108,7 +108,7 @@ def load_master(species):
     The master table is the single source of truth for the bird identity and the
     recording of every clip. 00_build_master_metadata.py writes it.
     """
-    path = DATA / f"{species}/metadata/{species}_master.csv"
+    path = ROOT / f"data/{species}/metadata/{species}_master.csv"
     if not path.exists():
         raise SystemExit(f"{path} not found. Run src/00_build_master_metadata.py first.")
     table = pd.read_csv(path, dtype=str)

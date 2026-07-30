@@ -92,7 +92,7 @@ N_DRAWS = 12
 
 def load_clips():
     """Return one mean embedding for each clip of the chosen subset."""
-    master = pd.read_csv(DATA / f"{SPECIES}/metadata/{SPECIES}_master.csv", dtype=str)
+    master = pd.read_csv(ROOT / f"data/{SPECIES}/metadata/{SPECIES}_master.csv", dtype=str)
     records = {r["original_stem"]: r for _, r in master.iterrows()}
 
     root = ROOT / f"bacpipe_results/{SPECIES}/embeddings"

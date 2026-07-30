@@ -72,7 +72,7 @@ def load_combined_master():
 
     The function returns None when the supplementary metadata is absent.
     """
-    single_path = DATA / f"{SPECIES}/metadata/{SPECIES}_master.csv"
+    single_path = ROOT / f"data/{SPECIES}/metadata/{SPECIES}_master.csv"
     if not single_path.exists():
         raise SystemExit(f"{single_path} not found. Run stage 0 first.")
 
