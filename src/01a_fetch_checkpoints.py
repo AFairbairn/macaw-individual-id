@@ -3,61 +3,59 @@
 01a_fetch_checkpoints.py
 
 PURPOSE
-    Download the model checkpoints that bacpipe does not fetch by itself.
-    Run this before 01_extract_embeddings.py.
+    Check every model checkpoint that bacpipe has downloaded, and delete any
+    file that will not open. bacpipe downloads a checkpoint again when its
+    directory is absent, so a deleted file is replaced on the next run.
 
 USAGE
     python src/01a_fetch_checkpoints.py
 
 INPUT
-    config.yaml    The checkpoints block names what to download.
-    The Hugging Face dataset repository named in that block.
+    The bacpipe settings file, for the checkpoint directory.
+    config.yaml, for the checksum of a file where one is recorded.
 
 OUTPUT
-    bacpipe/model_checkpoints/<model>/
-        The weight files, below the repository root.
-
-WHY A DOWNLOAD IS NOT ENOUGH
-    A checkpoint that arrives damaged does not announce itself. bacpipe loads
-    it, raises, catches its own exception, and writes zero embeddings. The run
-    continues and reports success, and the loss appears three stages later in
-    01b_verify_embeddings.py.
-
-    So every file is checked here, at the point where it can still be fixed
-    cheaply.
-
-    sha256      Where config.yaml records a checksum for a file, the downloaded
-                file must match it. A checksum catches a truncated or altered
-                download, which a file size alone can miss.
-    open it     Every checkpoint is opened with the reader its format needs. A
-                torch checkpoint must load. A .keras file must be a valid zip
-                archive. This is the check that would have caught the BEATs
-                checkpoint that downloaded at the right size and then failed
-                with "PytorchStreamReader failed reading zip archive".
+    A report on the terminal. The exit code is 0 when every checkpoint opens.
 
 WHY THIS SCRIPT EXISTS
-    bacpipe downloads the weights of most of its models on first use. BirdNET
-    is the exception. bacpipe ships no fetch step for it, so the model writes
-    zero embeddings and the run looks successful until 01b_verify_embeddings.py
-    counts the files.
+    bacpipe downloads its own checkpoints. It decides whether to download by
+    one test: does the directory of that model exist and hold at least one
+    file. A download that stops part of the way through leaves a short file in
+    that directory, so the test passes and bacpipe never downloads again. The
+    model then fails on every run, with an error that names the file format
+    rather than the cause.
 
-    The download is a stage of the pipeline, so it lives here and run_all.sh
-    calls it. A reader of this repository then sees every step that the
-    published numbers depend on.
+    That happened here. A download stopped when the disk quota ran out and left
+    113,246,208 bytes of a 363,145,291 byte BEATs checkpoint. Every later run
+    read the short file and raised
+    "PytorchStreamReader failed reading zip archive: failed finding central
+    directory", and the model wrote no embeddings.
 
-WHERE THE FILES GO
-    bacpipe reads its checkpoints from a path relative to the working
-    directory. run_all.sh runs every stage from the repository root, so this
-    script writes to <repository root>/bacpipe/model_checkpoints. The
-    .gitignore excludes that directory, because the weights are downloaded and
-    not source.
+    The rule this script applies: an interrupted download must not become
+    permanent. Open every checkpoint. Delete what does not open. bacpipe then
+    fetches it again.
 
-RERUNNING
-    Hugging Face skips a file that is already present and complete, so a second
-    run costs one request for each file.
+WHERE THE CHECKPOINTS ARE
+    bacpipe reads model_base_path from settings.yaml inside its own installed
+    package. The value is a relative path, so it resolves from the working
+    directory, and run_all.sh runs every stage from the repository root.
+
+    This script reads the same setting, so it checks the directory bacpipe
+    reads whatever that value is.
+
+HOW A FILE IS CHECKED
+    torch checkpoint    It must load.
+    keras or zip file   It must be a valid zip archive.
+    tar archive         It must open and list its members.
+    recorded checksum   Where config.yaml records a sha256 for a file, the file
+                        must match it.
+
+    A file of a format this script does not know is reported and left alone.
 """
 import hashlib
+import shutil
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -65,7 +63,27 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
-TARGET = ROOT / "bacpipe" / "model_checkpoints"
+
+# The default in the bacpipe settings file. It is used when that file cannot be
+# read, so the check still runs.
+DEFAULT_BASE = "bacpipe_model_checkpoints"
+
+
+def checkpoint_root():
+    """Return the directory bacpipe reads its checkpoints from."""
+    try:
+        import bacpipe
+    except ImportError:
+        return ROOT / DEFAULT_BASE
+
+    settings = Path(bacpipe.__file__).parent / "settings.yaml"
+    base = DEFAULT_BASE
+    if settings.is_file():
+        loaded = yaml.safe_load(settings.read_text()) or {}
+        base = loaded.get("model_base_path", DEFAULT_BASE)
+
+    path = Path(base)
+    return path if path.is_absolute() else ROOT / path
 
 
 def sha256_of(path):
@@ -77,11 +95,12 @@ def sha256_of(path):
     return digest.hexdigest()
 
 
-def open_check(path):
-    """Open one checkpoint with the reader its format needs.
+def open_problem(path):
+    """Open one file with the reader its format needs.
 
     Return an empty string when the file opens, or a message when it does not.
-    A file that downloads at the correct size can still be unreadable.
+    A file of an unknown format returns an empty string, because this script
+    cannot judge it.
     """
     suffix = path.suffix.lower()
 
@@ -96,80 +115,82 @@ def open_check(path):
             return f"{type(error).__name__}: {error}"
         return ""
 
-    if suffix in (".keras", ".zip", ".h5"):
-        if suffix != ".h5" and not zipfile.is_zipfile(path):
+    if suffix in (".keras", ".zip"):
+        if not zipfile.is_zipfile(path):
             return "not a valid zip archive"
+        return ""
+
+    if suffix in (".xz", ".gz", ".bz2", ".tar"):
+        try:
+            with tarfile.open(path) as archive:
+                archive.getmembers()
+        except Exception as error:
+            return f"{type(error).__name__}: {error}"
         return ""
 
     return ""
 
 
+def recorded_checksums():
+    """Return the sha256 recorded in config.yaml, keyed by relative path."""
+    recorded = {}
+    for entry in (CONFIG.get("checkpoints") or {}).values():
+        recorded.update(entry.get("sha256") or {})
+    return recorded
+
+
 def main():
-    """Download every checkpoint named in config.yaml. Return an exit code."""
-    block = CONFIG.get("checkpoints")
-    if not block:
-        print("config.yaml has no checkpoints block. Nothing to download.")
+    """Check every checkpoint. Delete what does not open. Return an exit code."""
+    root = checkpoint_root()
+    print(f"Checkpoint directory: {root}")
+
+    if not root.is_dir():
+        print("  No checkpoint has been downloaded yet. bacpipe downloads what")
+        print("  it needs when it runs.")
         return 0
 
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError:
-        print("huggingface_hub is not installed.")
-        print("Install the environment with: pip install -r requirements.txt")
-        return 1
+    checksums = recorded_checksums()
+    checked = removed = 0
 
-    TARGET.mkdir(parents=True, exist_ok=True)
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        # The download cache holds lock and metadata files, not checkpoints.
+        if ".cache" in path.parts:
+            continue
 
-    for name, entry in block.items():
-        print(f"{name}: downloading from {entry['repo_id']}", flush=True)
-        try:
-            snapshot_download(
-                entry["repo_id"],
-                repo_type=entry.get("repo_type", "dataset"),
-                allow_patterns=entry["patterns"],
-                local_dir=str(TARGET),
-            )
-        except Exception as error:
-            print(f"  FAILED: {type(error).__name__}: {error}")
-            print("  Check that this machine can reach huggingface.co.")
-            return 1
+        relative = path.relative_to(root).as_posix()
+        problem = ""
 
-        # Confirm the files are on disk. A silent failure here means the model
-        # writes zero embeddings in stage 1, which is expensive to discover.
-        present = sorted(p for p in (TARGET / name).rglob("*") if p.is_file())
-        if not present:
-            print(f"  FAILED: {TARGET / name} holds no file after the download.")
-            return 1
-        print(f"  {len(present)} file(s) in {TARGET / name}")
-
-        # Every recorded checksum must match.
-        recorded = entry.get("sha256") or {}
-        for relative, expected in recorded.items():
-            path = TARGET / relative
-            if not path.exists():
-                print(f"  FAILED: {relative} is named in config.yaml and is absent.")
-                return 1
+        expected = checksums.get(relative)
+        if expected:
             actual = sha256_of(path)
             if actual != expected:
-                print(f"  FAILED: {relative} does not match its recorded checksum.")
-                print(f"    expected {expected}")
-                print(f"    found    {actual}")
-                print("    Delete the file and run this script again.")
-                return 1
-            print(f"  checksum ok: {relative}")
+                problem = (f"the checksum does not match config.yaml. "
+                           f"expected {expected}, found {actual}")
 
-        # Every checkpoint must open.
-        for path in present:
-            problem = open_check(path)
-            if problem:
-                print(f"  FAILED: {path.relative_to(TARGET)} does not open.")
-                print(f"    {problem}")
-                print("    The file is present but unusable. Delete it and run")
-                print("    this script again.")
-                return 1
+        if not problem:
+            problem = open_problem(path)
 
-    print()
-    print("Every checkpoint is present.")
+        checked += 1
+        if not problem:
+            continue
+
+        print(f"  {relative}: {problem}")
+        print(f"    {path.stat().st_size} bytes. Deleting the model directory,")
+        print("    so bacpipe downloads this checkpoint again.")
+
+        # Delete the whole model directory. bacpipe decides whether to download
+        # by whether that directory exists and holds a file, so one file left
+        # behind stops the download.
+        model_dir = root / path.relative_to(root).parts[0]
+        shutil.rmtree(model_dir, ignore_errors=True)
+        removed += 1
+
+    print(f"  {checked} file(s) checked, {removed} model directory removed.")
+    if removed:
+        print()
+        print("bacpipe downloads the removed checkpoints when stage 1 runs.")
     return 0
 
 

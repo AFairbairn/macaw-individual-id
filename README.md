@@ -400,15 +400,19 @@ the species comparison.
 
 `min_seconds` is a preprocessing choice of this pipeline, not a property of the recordings.
 
-### 8.3 bacpipe does not fetch the BirdNET or the BEATs checkpoint
+### 8.3 An interrupted checkpoint download becomes permanent
 
-bacpipe downloads the weights of most of its models on first use. BirdNET and BEATs are the
-exceptions. Without the checkpoint the model writes zero embeddings, and the log looks
-normal.
+bacpipe downloads the weights of every model it needs. It decides whether to download by one
+test: does the directory of that model exist and hold at least one file. A download that stops
+part of the way through leaves a short file, so the test passes and bacpipe never downloads
+again. The model then fails on every run afterwards.
 
-`src/01a_fetch_checkpoints.py` downloads it into `bacpipe/model_checkpoints`, which is where
-bacpipe looks. `run_all.sh` runs it before stage 1 and stops the run if the download fails.
-The dataset repository and the file patterns are in the `checkpoints` block of `config.yaml`.
+The error names the file format rather than the cause. A truncated torch checkpoint gives
+`PytorchStreamReader failed reading zip archive: failed finding central directory`.
+
+`src/01a_fetch_checkpoints.py` opens every checkpoint before stage 1 and deletes any that will
+not load, so bacpipe fetches it again. Where `config.yaml` records a sha256 for a file, the
+file must match it as well. `run_all.sh` runs this before every extraction.
 
 ### 8.4 bacpipe prints harmless errors
 

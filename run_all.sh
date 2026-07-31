@@ -219,10 +219,11 @@ if [[ "$STAGE" == "all" || "$STAGE" == "embed" ]]; then
   begin_stage "STAGE 1 of 5   Embedding extraction   [GPU, resumable]"
 # =============================================================================
 
-  # bacpipe does not fetch the BirdNET checkpoint. Without it that model writes
-  # zero embeddings and the log looks normal.
+  # bacpipe downloads its own checkpoints, and never downloads again once a
+  # directory holds a file. This deletes any checkpoint that will not open, so
+  # an interrupted download does not become permanent.
   "$PY_BIN" src/01a_fetch_checkpoints.py \
-    || die "A model checkpoint could not be downloaded. See the output above."
+    || die "The checkpoint check failed. See the output above."
 
   for sp in aa ag; do
     "$PY_BIN" src/01_extract_embeddings.py --species "$sp" --device "$DEVICE" --clear

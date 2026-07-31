@@ -15,8 +15,9 @@ logs/
 bacpipe_results/
 mfcc_results/
 
-# Downloaded model weights. 01a_fetch_checkpoints.py recreates them.
+# Downloaded model weights. bacpipe downloads these when it runs.
 bacpipe/
+bacpipe_model_checkpoints/
 
 # The padded audio. 00a_pad_audio.py recreates it from the published audio.
 audio_padded/

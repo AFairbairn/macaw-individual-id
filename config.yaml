@@ -168,47 +168,23 @@ models:
 #    noisier than in their study.
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
-# Checkpoints that bacpipe does not fetch by itself
+# Checkpoint checksums
 #
-# bacpipe downloads the weights of most models on first use. BirdNET is the
-# exception. Without this download the model writes zero embeddings and the run
-# looks successful until 01b_verify_embeddings.py counts the files.
+# bacpipe downloads the weights of every model it needs. It decides whether to
+# download by whether the directory of that model exists and holds a file, so a
+# download that stops part of the way through leaves a short file and bacpipe
+# never downloads again.
 #
-# src/01a_fetch_checkpoints.py reads this block and writes to
-# bacpipe/model_checkpoints below the repository root, which is where bacpipe
-# looks.
+# src/01a_fetch_checkpoints.py opens every checkpoint before stage 1 and
+# deletes any that will not load, so bacpipe fetches it again. Where a sha256
+# is recorded below, the file must also match it.
+#
+# To record a checksum, take the sha256 the Hugging Face API reports for the
+# file, at
+# https://huggingface.co/api/datasets/vskode/bacpipe_models/tree/main/<model>?expand=true
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Padding
-#
-# The calls are short. Every Ara ambiguus clip is between 0.192 and 1.093
-# seconds. BirdNET and WavLMForXVector both fail on the shortest of them, and
-# BirdNET skips the clip rather than stopping, so the loss is silent.
-#
-# 00a_pad_audio.py adds trailing silence to any clip below min_seconds and
-# copies the rest unchanged. Stage 1 and stage 2 both read the padded copy, so
-# every representation sees the same audio.
-#
-# The rule is applied to both species. To pad one and not the other would put a
-# preprocessing difference inside the species comparison, which is the main
-# result of the paper. min_seconds is a preprocessing choice and a property of
-# the method, not a property of the recordings.
-# -----------------------------------------------------------------------------
-padding:
-  min_seconds: 1.0
-
 checkpoints:
-  birdnet:
-    repo_id: vskode/bacpipe_models
-    repo_type: dataset
-    patterns:
-      - birdnet/birdnetv2.4.keras
-      - birdnet/BirdNET_Preprocessor/*
   beats:
-    repo_id: vskode/bacpipe_models
-    repo_type: dataset
-    patterns:
-      - beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt1.pt
     sha256:
       beats/BEATs_iter3_plus_AS2M_finetuned_on_AS2M_cpt1.pt:
         7f9362028ac6e5c049e8dc314d87e90e4f82a15a8e472deb56af55d7f9b34d6a
