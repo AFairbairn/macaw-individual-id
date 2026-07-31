@@ -264,9 +264,9 @@ end_stage
 # =============================================================================
 begin_stage "STAGE 4 of 5   Metric learning   [CPU bound]"
 # =============================================================================
-# CAUTION: This stage writes its results when a subset finishes. If the process
-# stops in the middle of a subset, the work for that subset is lost. Run this
-# script inside tmux or screen, or submit it as a batch job.
+# This stage writes each model's rows as that model finishes, so a run that
+# stops costs the model in progress and nothing before it. Run it again to score
+# the models that are left. See RERUNNING in src/04_metric_learning.py.
 for sp in aa ag; do
   # CPU, not "$DEVICE". The head is one small network on fewer than 1,100
   # vectors, and CUDA kernels are not deterministic, so a GPU run gives

@@ -35,11 +35,20 @@ OUTPUT
     results/<species>/<subset>/metric_learning/head_embeddings.csv
         The vectors in the learned space. Written with --dump-embeddings.
 
-CAUTION
-    This script writes its results when a subset finishes. If the process stops
-    in the middle of a subset, the work for that subset is lost. Run the script
-    inside tmux or screen, or submit it as a batch job. 03_classify.py is
-    different, because it appends its results for each model.
+    results/<species>/<subset>/metric_learning/by_model/
+        One set of rows for each model, written as that model finishes. The
+        four tables above are joined from these.
+
+RERUNNING
+    A model is scored once. Its rows go into by_model/ as soon as it finishes,
+    and a later run reads them and scores the models that are left. A run that
+    stops therefore costs the model in progress and nothing before it.
+
+    To score one model again, delete its files from by_model/ and run the script
+    again. To score every model again, delete by_model/.
+
+    Every head starts from the same weights, so one model scored alone gives the
+    same numbers as that model scored inside a full run. See train_head.
 
 THE PROBLEM THIS ADDRESSES
     The frozen embeddings show that identity is DECODABLE. A linear probe
@@ -308,6 +317,12 @@ def train_head(features, labels, loss_kind, classes):
     generator_torch = torch.Generator(device=DEVICE)
     generator_torch.manual_seed(SEED)
 
+    # Seed the global generator here, because nn.Linear draws its starting
+    # weights from it. Every head therefore starts from the same weights, and
+    # the score of one model is the same whatever ran before it in the same
+    # process. That is what lets this stage resume, and it is what makes one
+    # model scored alone equal to that model scored inside a full run.
+    torch.manual_seed(SEED)
     head = Head(features.shape[1], PROJECTION_DIM).to(DEVICE)
     optimiser = torch.optim.AdamW(head.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
@@ -724,6 +739,34 @@ def evaluate_model(model, frame, dump=False):
 # Entry point
 # =============================================================================
 
+def write_part(directory, model, kind, rows):
+    """Write one model's rows for one output, or remove the file when empty.
+
+    The file is written to a temporary name and moved into place, so a process
+    that stops during the write leaves no half-written file for the next run to
+    read as complete.
+    """
+    target = directory / f"{model}.{kind}.csv"
+    if not rows:
+        target.unlink(missing_ok=True)
+        return
+    temporary = target.with_suffix(".csv.part")
+    pd.DataFrame(rows).to_csv(temporary, index=False)
+    os.replace(temporary, target)
+
+
+def read_parts(directory, kind):
+    """Return every model's rows for one output, in model name order.
+
+    Reading in model name order gives the same row order as a run that scored
+    every model in one pass, because that run iterates the models sorted.
+    """
+    frames = []
+    for path in sorted(directory.glob(f"*.{kind}.csv")):
+        frames.append(pd.read_csv(path))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 def subset_filter(species, name):
     """Return a function that selects the rows of one subset."""
     rule = CONFIG["subsets"][species][name]
@@ -771,12 +814,18 @@ def main():
         keep_stems = {stem for stem, record in master.items() if keep(record)}
 
         out_dir = ROOT / "results" / species / subset / "metric_learning"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        parts_dir = out_dir / "by_model"
+        parts_dir.mkdir(parents=True, exist_ok=True)
         print(f"--- subset={subset} ({len(keep_stems)} clips) -> {out_dir}", flush=True)
 
-        all_summary, all_repeats, all_predictions, all_dumps = [], [], [], []
-
         for model, directory in sorted(model_dirs.items()):
+            # One model's work is on disk once its summary part exists, so a run
+            # that starts again scores the models that are left. See RERUNNING
+            # in the module docstring.
+            if (parts_dir / f"{model}.summary.csv").exists():
+                print(f"  {model}: scored, from {parts_dir.name}/", flush=True)
+                continue
+
             frame = load_embeddings(directory, model, master, keep_stems)
             if len(frame) < 20 or frame["bird"].nunique() < 3:
                 print(f"  {model}: too few calls, skipped", flush=True)
@@ -785,17 +834,15 @@ def main():
             summary, repeats, dumped, predictions = evaluate_model(
                 model, frame, dump=args.dump_embeddings
             )
-            all_summary += summary
-            all_repeats += repeats
-            all_predictions += predictions
 
+            dumps = []
             if dumped:
                 for method, records in dumped.items():
                     if method == "frozen":
                         # The frozen vectors are already on disk as .npy files.
                         continue
                     for clip, bird, session, vector in records:
-                        all_dumps.append(
+                        dumps.append(
                             {
                                 "model": model,
                                 "method": method,
@@ -805,6 +852,15 @@ def main():
                                 **{f"e{i}": float(v) for i, v in enumerate(vector)},
                             }
                         )
+
+            # The summary part is written last, because its presence is what
+            # marks this model as scored. A run that stops between these writes
+            # therefore scores the model again rather than reading a part that
+            # is missing its companions.
+            write_part(parts_dir, model, "head", dumps)
+            write_part(parts_dir, model, "predictions", predictions)
+            write_part(parts_dir, model, "folds", repeats)
+            write_part(parts_dir, model, "summary", summary)
 
             frozen = next(r for r in summary if r["method"] == "frozen" and r["eval"] == "A_closed")
             best = next(r for r in summary if r["method"] == LOSSES[-1] and r["eval"] == "A_closed")
@@ -816,18 +872,20 @@ def main():
                 flush=True,
             )
 
-        # The results are written once, when the subset finishes. See the
-        # caution in the module docstring.
-        pd.DataFrame(all_summary).to_csv(out_dir / "summary.csv", index=False)
-        pd.DataFrame(all_repeats).to_csv(out_dir / "eval_B_folds.csv", index=False)
-        print(f"  wrote summary.csv and eval_B_folds.csv", flush=True)
+        # Join the parts into the four published tables.
+        read_parts(parts_dir, "summary").to_csv(out_dir / "summary.csv", index=False)
+        read_parts(parts_dir, "folds").to_csv(out_dir / "eval_B_folds.csv", index=False)
+        print("  wrote summary.csv and eval_B_folds.csv", flush=True)
 
-        if all_predictions:
-            pd.DataFrame(all_predictions).to_csv(out_dir / "predictions.csv", index=False)
-            print(f"  wrote predictions.csv ({len(all_predictions)} rows)", flush=True)
-        if all_dumps:
-            pd.DataFrame(all_dumps).to_csv(out_dir / "head_embeddings.csv", index=False)
-            print(f"  wrote head_embeddings.csv ({len(all_dumps)} rows)", flush=True)
+        predictions_table = read_parts(parts_dir, "predictions")
+        if len(predictions_table):
+            predictions_table.to_csv(out_dir / "predictions.csv", index=False)
+            print(f"  wrote predictions.csv ({len(predictions_table)} rows)", flush=True)
+
+        dumps_table = read_parts(parts_dir, "head")
+        if len(dumps_table):
+            dumps_table.to_csv(out_dir / "head_embeddings.csv", index=False)
+            print(f"  wrote head_embeddings.csv ({len(dumps_table)} rows)", flush=True)
 
 
 if __name__ == "__main__":
