@@ -242,7 +242,11 @@ def run_probe(features, labels, groups, mode, clips=None):
             continue
 
         scaler = StandardScaler().fit(features[train])
-        model = LogisticRegression(max_iter=1500, random_state=SEED, n_jobs=1)
+        # The fit runs on one thread. run_all.sh sets OMP_NUM_THREADS,
+        # MKL_NUM_THREADS and OPENBLAS_NUM_THREADS to 1, which holds the
+        # underlying linear algebra to one thread and makes the result the same
+        # on every machine.
+        model = LogisticRegression(max_iter=1500, random_state=SEED)
         model.fit(scaler.transform(features[train]), codes[train])
         predicted = model.predict(scaler.transform(features[test]))
 
