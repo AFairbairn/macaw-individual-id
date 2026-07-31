@@ -56,6 +56,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -88,16 +89,31 @@ def md5_of(path):
 
 
 def installed_packages():
-    """Return the output of `pip freeze` as a list of lines.
+    """Return every installed package as one 'name==version' line.
 
-    `pip freeze` reports the exact installed version of every package. It is
-    more precise than requirements.txt, which can hold a version range.
+    The list comes from importlib.metadata, which is part of the standard
+    library and reads the same installed metadata that pip reads. A virtual
+    environment made by uv holds no pip, so `pip freeze` fails there, and it is
+    the tool this project uses to get Python 3.11 on a machine that ships 3.10.
+
+    importlib.metadata is also the more useful record. `pip freeze` writes
+    'package @ file:///path/to/wheel' for a locally built wheel and
+    '-e git+...' for an editable install, so its output carries paths from the
+    machine that produced it and can never match on another one.
+
+    The name is normalised the way the packaging standard defines, so two
+    machines that spell a name differently still compare equal.
     """
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "freeze"],
-        capture_output=True, text=True, check=True,
-    )
-    return sorted(line for line in result.stdout.splitlines() if line.strip())
+    from importlib import metadata
+
+    seen = {}
+    for distribution in metadata.distributions():
+        name = distribution.metadata["Name"]
+        if not name:
+            continue
+        key = re.sub(r"[-_.]+", "-", name).lower()
+        seen[key] = f"{key}=={distribution.version}"
+    return sorted(seen.values())
 
 
 def weight_search_paths():
@@ -224,18 +240,38 @@ def do_verify(strict):
 
     problems = []
 
-    recorded = set(PACKAGES.read_text().splitlines())
-    current = set(installed_packages())
+    def as_mapping(lines):
+        """Turn 'name==version' lines into a name to version mapping."""
+        out = {}
+        for line in lines:
+            if "==" in line:
+                name, version = line.split("==", 1)
+                out[name.strip()] = version.strip()
+        return out
 
-    changed = sorted(recorded ^ current)
-    if changed:
-        problems.append(f"{len(changed)} package difference(s)")
+    recorded = as_mapping(PACKAGES.read_text(encoding="utf-8").splitlines())
+    current = as_mapping(installed_packages())
+
+    # Report the three kinds separately. A changed version matters more than a
+    # package that one environment holds and the other does not.
+    version_changed = sorted(
+        (name, recorded[name], current[name])
+        for name in recorded.keys() & current.keys()
+        if recorded[name] != current[name]
+    )
+    only_recorded = sorted(recorded.keys() - current.keys())
+    only_current = sorted(current.keys() - recorded.keys())
+
+    if version_changed or only_recorded or only_current:
+        total = len(version_changed) + len(only_recorded) + len(only_current)
+        problems.append(f"{total} package difference(s)")
         print("PACKAGE DIFFERENCES")
-        for line in changed[:20]:
-            marker = "recorded" if line in recorded else "current "
-            print(f"  [{marker}] {line}")
-        if len(changed) > 20:
-            print(f"  ... and {len(changed) - 20} more")
+        for name, was, now in version_changed[:20]:
+            print(f"  [version ] {name}: recorded {was}, found {now}")
+        for name in only_recorded[:10]:
+            print(f"  [absent  ] {name}=={recorded[name]}")
+        for name in only_current[:10]:
+            print(f"  [added   ] {name}=={current[name]}")
         print()
 
     if WEIGHTS.exists():
