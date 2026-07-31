@@ -168,6 +168,25 @@ models:
 #    noisier than in their study.
 # -----------------------------------------------------------------------------
 # -----------------------------------------------------------------------------
+# Padding
+#
+# The calls are short. Every Ara ambiguus clip is between 0.192 and 1.093
+# seconds. BirdNET and WavLMForXVector both fail on the shortest of them, and
+# BirdNET skips the clip rather than stopping, so the loss is silent.
+#
+# 00a_pad_audio.py adds trailing silence to any clip below min_seconds and
+# copies the rest unchanged, into audio_padded/. Stage 1 and stage 2 both read
+# that copy, so every representation sees the same audio.
+#
+# The rule applies to both species. To pad one and not the other would put a
+# preprocessing difference inside the species comparison, which is the main
+# result of the paper. min_seconds is a preprocessing choice of this pipeline
+# and belongs in the methods.
+# -----------------------------------------------------------------------------
+padding:
+  min_seconds: 1.0
+
+# -----------------------------------------------------------------------------
 # Checkpoint checksums
 #
 # bacpipe downloads the weights of every model it needs. It decides whether to

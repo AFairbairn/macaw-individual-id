@@ -123,10 +123,15 @@ def pad_one(source, target, minimum_samples):
 
 def main():
     """Pad every clip of every species. Return an exit code."""
+    # Stop. Two models fail on the shortest clips, so a run without padding
+    # loses embeddings and says nothing. A missing block is a broken config,
+    # not an instruction to skip the stage.
     block = CONFIG.get("padding")
     if not block:
-        print("config.yaml has no padding block. Nothing to do.")
-        return 0
+        print("config.yaml has no padding block.")
+        print("Stage 1 and stage 2 read audio_padded/, which this stage writes.")
+        print("Restore the padding block. tests/test_config.py checks for it.")
+        return 1
 
     minimum_seconds = float(block["min_seconds"])
     print(f"Minimum clip length: {minimum_seconds} s")
