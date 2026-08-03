@@ -21,36 +21,42 @@ The species are:
 **Python 3.11 or newer is required.** bacpipe publishes no build for 3.10, and bacpipe
 supplies 13 of the 15 pre-trained models.
 
+Nothing has to be installed by hand. `run_all.sh` calls `setup.sh`, which builds the two
+environments the pipeline needs and stops if either one cannot be built.
+
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
+./run_all.sh
 ```
 
-`requirements.txt` names five packages. bacpipe pins the rest of the stack, and it pulls
-torch, torchaudio, transformers, librosa, numpy, pandas, scipy, scikit-learn and PyYAML with
-it.
+There are two environments because stage 1 imports bacpipe, which pins the whole numerical
+and audio stack, and no other stage imports any of it. One environment made every result
+table hostage to whatever bacpipe resolved.
+
+| Environment | Built from | Used by |
+|---|---|---|
+| `.venv-extraction/` | `requirements-extraction.txt` | stage 1 |
+| `.venv-analysis/` | `requirements-analysis.txt` | stages 0 and 2 to 6 |
+
+Neither is ever activated, by this pipeline or by you. `run_all.sh` calls each stage with the
+absolute path of its interpreter. The extraction environment is built only when stage 1 is in
+the range, so a machine that scores published embeddings never installs bacpipe.
 
 If the machine has no Python 3.11 and you cannot install one, use `uv`. It puts a standalone
-interpreter in your home directory and needs no administrator rights.
+interpreter in your home directory and needs no administrator rights. `setup.sh` finds it.
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv python install 3.11
-uv venv --python 3.11 .venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
 ```
 
 Stage 1 downloads model weights from `huggingface.co` the first time it runs, so that
-machine needs network access. Later runs read the cache. Stages 2 to 5 need no network.
+machine needs network access. Later runs read the cache. Stages 0 and 2 to 6 need no network.
 
-To record the environment that produced a set of results, run this once, in the activated
-environment on the machine that produced them.
+To record the environment that produced a set of results, run this once on the machine that
+produced them.
 
 ```bash
-python src/08_freeze_environment.py freeze
+.venv-analysis/bin/python src/freeze_environment.py freeze
 ```
 
 That writes `environment.lock/`, which holds every installed package version, an md5 checksum
@@ -189,16 +195,17 @@ The rules that govern how this repository is written are in `docs/WRITING_STANDA
 
 ## 4. What the pipeline does
 
-The pipeline has six stages, numbered 0 to 5. Stage 1 is the only stage that uses a GPU.
+The pipeline has seven stages, numbered 0 to 6. Stage 1 is the only stage that uses a GPU.
 
 | Stage | Script | Output | Hardware |
 |---|---|---|---|
-| 0 | `00_build_master_metadata.py`, `00a_pad_audio.py` | `audio_padded/` | CPU |
-| 1 | `01a_fetch_checkpoints.py`, `01_extract_embeddings.py`, `01b_verify_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU |
+| 0 | `00_prepare_data.py` | `audio_padded/` | CPU |
+| 1 | `01_extract_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU |
 | 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU |
-| 3 | `03_classify.py` | `results/<sp>/rows.csv` | CPU |
+| 3 | `03_score_frozen.py` | `results/<sp>/rows.csv` | CPU |
 | 4 | `04_metric_learning.py` | `results/<sp>/<subset>/metric_learning/` | CPU |
-| 5 | `05_diagnostics.py`, `06_leakage_experiment.py`, `09_supplementary_bouts.py`, `07_manifest.py` | `results/diagnostics/`, `results/supplementary/`, `results/MANIFEST.csv` | CPU |
+| 5 | `05_diagnostics.py`, `05a_leakage_experiment.py`, `05b_supplementary_bouts.py` | `results/diagnostics/`, `results/supplementary/` | CPU |
+| 6 | `06_finish_run.py` | `results/MANIFEST.csv`, `run_outputs/` | CPU |
 
 Stage 0 builds the master metadata table. This table is the single source of truth for the
 bird identity and the `recording_id` of every clip. Every later stage reads it.
@@ -211,26 +218,27 @@ bird identity and the `recording_id` of every clip. Every later stage reads it.
 macaw-individual-id/
 â”œâ”€â”€ README.md                     This file.
 â”œâ”€â”€ LICENSE                       MIT.
-â”œâ”€â”€ requirements.txt              The five direct dependencies.
+â”œâ”€â”€ .gitattributes                Every text file is LF, on every platform.
+â”œâ”€â”€ requirements-extraction.txt   What stage 1 needs. bacpipe pins the rest.
+â”œâ”€â”€ requirements-analysis.txt     What stages 0 and 2 to 6 need.
 â”œâ”€â”€ config.yaml                   Every analysis choice, in one file.
 â”œâ”€â”€ run_all.sh                    The single entry point.
+â”œâ”€â”€ setup.sh                      Builds the two environments. run_all.sh calls it.
 â”œâ”€â”€ docs/
 â”‚   â”œâ”€â”€ GLOSSARY.md               One meaning for every term.
 â”‚   â””â”€â”€ WRITING_STANDARD.md       How this repository is written.
 â”œâ”€â”€ src/
-â”‚   â”œâ”€â”€ 00_build_master_metadata.py
-â”‚   â”œâ”€â”€ 00a_pad_audio.py
-â”‚   â”œâ”€â”€ 01a_fetch_checkpoints.py
+â”‚   â”œâ”€â”€ common.py                 The run record, the provenance stamp, the splits.
+â”‚   â”œâ”€â”€ 00_prepare_data.py
 â”‚   â”œâ”€â”€ 01_extract_embeddings.py
-â”‚   â”œâ”€â”€ 01b_verify_embeddings.py
 â”‚   â”œâ”€â”€ 02_extract_mfcc.py
-â”‚   â”œâ”€â”€ 03_classify.py
+â”‚   â”œâ”€â”€ 03_score_frozen.py
 â”‚   â”œâ”€â”€ 04_metric_learning.py
 â”‚   â”œâ”€â”€ 05_diagnostics.py
-â”‚   â”œâ”€â”€ 06_leakage_experiment.py
-â”‚   â”œâ”€â”€ 07_manifest.py
-â”‚   â”œâ”€â”€ 08_freeze_environment.py
-â”‚   â””â”€â”€ 09_supplementary_bouts.py
+â”‚   â”œâ”€â”€ 05a_leakage_experiment.py
+â”‚   â”œâ”€â”€ 05b_supplementary_bouts.py
+â”‚   â”œâ”€â”€ 06_finish_run.py
+â”‚   â””â”€â”€ freeze_environment.py
 â”œâ”€â”€ tests/
 â”‚   â”œâ”€â”€ test_config.py            Asserts that no threshold is hard-coded in a script.
 â”‚   â”œâ”€â”€ test_output_paths.py      Asserts that every model writes where the stages read.
@@ -276,7 +284,7 @@ is that *Ara ambiguus* is easier to identify than *Ara glaucogularis*. If *Ara
 ambiguus* used bouts and *Ara glaucogularis* did not, part of that difference
 would come from the acoustic unit rather than from the biology.
 
-`src/09_supplementary_bouts.py` scores the bouts separately, for the supplement.
+`src/05b_supplementary_bouts.py` scores the bouts separately, for the supplement.
 
 ### 6.3 The subsets
 
@@ -321,7 +329,7 @@ The assumption is necessary here, because 15 of 76 `ag` recordings and 2 of 211 
 recordings hold calls from two birds. To pool all calls in those recordings would average two
 birds into one query.
 
-`00_build_master_metadata.py` reports the number of multi-bird recordings for each species
+`00_prepare_data.py` reports the number of multi-bird recordings for each species
 when it validates the tables, and `tests/test_splits.py` asserts the two counts above.
 
 ### 6.6 Clustering metrics
@@ -394,7 +402,7 @@ skips the clip and continues, so the model writes no embedding for it and the lo
 total. WavLMForXVector fails the same way, because its convolution and TDNN stack needs a
 minimum number of frames.
 
-`src/00a_pad_audio.py` adds trailing silence to any clip below `padding.min_seconds` in
+`src/00_prepare_data.py` adds trailing silence to any clip below `padding.min_seconds` in
 `config.yaml` and copies the rest unchanged, into `audio_padded/`. Stage 1 and stage 2 both
 read that copy, so every representation sees the same audio. The rule is applied to both
 species, because padding one and not the other would put a preprocessing difference inside
@@ -412,9 +420,9 @@ again. The model then fails on every run afterwards.
 The error names the file format rather than the cause. A truncated torch checkpoint gives
 `PytorchStreamReader failed reading zip archive: failed finding central directory`.
 
-`src/01a_fetch_checkpoints.py` opens every checkpoint before stage 1 and deletes any that will
-not load, so bacpipe fetches it again. Where `config.yaml` records a sha256 for a file, the
-file must match it as well. `run_all.sh` runs this before every extraction.
+`src/01_extract_embeddings.py` opens every checkpoint before it starts and, when
+`--repair-checkpoints` is given, deletes any that will not load, so bacpipe fetches it again.
+Where `config.yaml` records a sha256 for a file, the file must match it as well.
 
 ### 8.4 bacpipe prints harmless errors
 
@@ -427,8 +435,9 @@ use. That step prints many tracebacks. The messages below are harmless.
 - `Length mismatch between time_bins`
 - `Input image size 128*300`
 
-Do not use the absence of tracebacks to confirm success. Run `01b_verify_embeddings.py`
-instead. That script counts the `.npy` files for each model.
+Do not use the absence of tracebacks to confirm success. `01_extract_embeddings.py` counts
+the `.npy` files for each model when it finishes, and that count is what says whether the
+stage worked.
 
 ### 8.5 avesecho_passt fails on CUDA
 
@@ -441,8 +450,12 @@ through the `CPU_ONLY_MODELS` list.
 Warning: Do not run `pip install -U jax[cuda12]`. The `-U` flag upgrades numpy to version 2,
 which breaks the pinned torch and bacpipe environment.
 
-To repair a broken environment, delete it and rebuild it from `requirements.txt`. Then run
-`python src/08_freeze_environment.py verify`.
+To repair a broken environment, delete it and let `run_all.sh` rebuild it.
+
+```bash
+rm -rf .venv-extraction && ./setup.sh extraction
+.venv-analysis/bin/python src/freeze_environment.py verify
+```
 
 ### 8.7 Stage 4 writes only at the end of a subset
 

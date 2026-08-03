@@ -1,0 +1,35 @@
+# =============================================================================
+# .gitattributes
+#
+# RULE
+#   Every text file is LF, in the repository and in the working tree, on every
+#   platform. Nothing here changes what a file says. It fixes only how a line
+#   ends, so that the same file has the same checksum wherever it is checked
+#   out.
+#
+# WHY THIS FILE EXISTS
+#   Without it, git on Windows stores LF and writes CRLF into the working tree.
+#   A Linux clone then holds LF. The two are the same table and they have
+#   different checksums, and on 2026-08-03 that stopped a run at stage 0: the
+#   master tables in the repository and the copies in the published archive were
+#   byte for byte identical on Windows and differed by 481 carriage returns on
+#   the cluster.
+#
+#   The same difference moves config_hash, which every result row carries. The
+#   same config.yaml has to hash to the same value on the machine that writes
+#   the paper and on the machine that runs the pipeline, or the provenance
+#   stamp records the platform rather than the configuration.
+# =============================================================================
+
+# Text is LF everywhere. git detects which files are text.
+* text=auto eol=lf
+
+# Audio and archives are never line-ending converted. These are named because a
+# corrupted wav is silent damage, and detection is not worth relying on here.
+*.wav binary
+*.gz binary
+*.zip binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.aup3 binary

@@ -178,6 +178,25 @@ def md5_of(path):
     return digest.hexdigest()
 
 
+def md5_of_text(path):
+    """Return the md5 of one text file, with every line ending read as LF.
+
+    Two copies of the same table written on different platforms differ in every
+    line and say the same thing. This reports a difference in what a table holds
+    and never a difference in how its lines end.
+
+    On 2026-08-03 that distinction stopped a run. The master tables in this
+    repository and the copies in the published archive were identical cell for
+    cell, and their checksums differed by the 481 carriage returns that Windows
+    had written into one of them.
+
+    The whole file is read at once. This reads master tables, the largest of
+    which is 216 kB, and reading it in one piece is what makes the line ending
+    substitution correct without holding a block boundary open.
+    """
+    return hashlib.md5(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def master_path(species):
     """Return the path of the master table of one species.
 
@@ -203,17 +222,21 @@ def check_no_rival_copy(species):
     one this code ships, and every count would change without a message.
 
     A dataset root with no master table of its own is the normal case and passes.
+
+    The comparison ignores line endings. A copy that Windows wrote and a copy
+    that Linux wrote hold the same table, and the difference this check exists to
+    report is a difference in the rows.
     """
     repository = master_path(species)
     if not repository.exists():
         return None
 
-    recorded = md5_of(repository)
+    recorded = md5_of_text(repository)
     for candidate in (DATA / f"{species}/metadata/{species}_master.csv",
                       DATA.parent / f"data/{species}/metadata/{species}_master.csv"):
         if not candidate.exists() or candidate.resolve() == repository.resolve():
             continue
-        if md5_of(candidate) != recorded:
+        if md5_of_text(candidate) != recorded:
             return (
                 "the dataset root carries a different master table.\n"
                 f"    repository: {repository}\n"
