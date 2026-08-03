@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 04_metric_learning.py
 
@@ -206,7 +206,7 @@ def load_embeddings(model_dir, model, master, keep_stems):
             continue
 
         record = master[stem]
-        if str(record.get("session_known")) != "1" or record.get("recording_id") in (None, "NA"):
+        if common.is_missing(record.get("recording_id")):
             continue
 
         matrix = np.atleast_2d(np.load(path))
@@ -787,6 +787,16 @@ def main():
         help="Also write the head vectors and the per-window predictions.",
     )
     parser.add_argument("--subset", default="", help="Score one subset only.")
+    parser.add_argument(
+        "--models",
+        default="",
+        help="Score these models only, separated by commas. Every model when this is not set.",
+    )
+    parser.add_argument(
+        "--results-dir",
+        default="",
+        help="Write below this directory instead of results/. Used by the determinism check.",
+    )
     args = parser.parse_args()
 
     global DEVICE
@@ -802,6 +812,18 @@ def main():
     if not model_dirs:
         raise SystemExit(f"No embeddings found for {species}. Run stage 1 and stage 2 first.")
 
+    if args.models:
+        wanted = [name.strip() for name in args.models.split(",") if name.strip()]
+        unknown = [name for name in wanted if name not in model_dirs]
+        if unknown:
+            raise SystemExit(
+                f"No embeddings for: {', '.join(unknown)}. "
+                f"Available: {', '.join(sorted(model_dirs))}"
+            )
+        model_dirs = {name: model_dirs[name] for name in wanted}
+
+    results_root = Path(args.results_dir) if args.results_dir else ROOT / "results"
+
     subsets = [args.subset] if args.subset else list(CONFIG["subsets"][species])
     print(
         f"species={species} | {len(model_dirs)} models | subsets={subsets} | "
@@ -813,7 +835,7 @@ def main():
         keep = subset_filter(species, subset)
         keep_stems = {stem for stem, record in master.items() if keep(record)}
 
-        out_dir = ROOT / "results" / species / subset / "metric_learning"
+        out_dir = results_root / species / subset / "metric_learning"
         parts_dir = out_dir / "by_model"
         parts_dir.mkdir(parents=True, exist_ok=True)
         print(f"--- subset={subset} ({len(keep_stems)} clips) -> {out_dir}", flush=True)

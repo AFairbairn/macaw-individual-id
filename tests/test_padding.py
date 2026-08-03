@@ -42,8 +42,8 @@ RATE = 48000
 
 
 def load_stage():
-    """Import 00a_pad_audio.py, whose name is not a valid identifier."""
-    path = ROOT / "src/00a_pad_audio.py"
+    """Import 00_prepare_data.py, whose name is not a valid identifier."""
+    path = ROOT / "src/00_prepare_data.py"
     spec = importlib.util.spec_from_file_location("pad_stage", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

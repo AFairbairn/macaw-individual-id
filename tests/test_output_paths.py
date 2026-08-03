@@ -21,8 +21,8 @@ WHAT EACH TEST CHECKS
         The directory is high enough in the tree to hold every clip of the
         species. Naming it correctly is worthless if it holds half the audio.
     test_readers_and_writer_agree
-        01b_verify_embeddings.py and 03_classify.py read the directory that
-        01_extract_embeddings.py writes.
+        03_score_frozen.py reads the directory that 01_extract_embeddings.py
+        writes, and stage 1 counts its own output in the same place.
 """
 import importlib.util
 from pathlib import Path
@@ -68,8 +68,8 @@ def test_audio_dir_is_named_after_the_species(tmp_path, monkeypatch, species):
     audio_dir = stage_one.audio_dir_for(species)
 
     assert audio_dir.name == species, (
-        f"bacpipe writes to bacpipe_results/{audio_dir.name}/, but "
-        f"01b_verify_embeddings.py and 03_classify.py read "
+        f"bacpipe writes to bacpipe_results/{audio_dir.name}/, but the count "
+        f"check in stage 1 and 03_score_frozen.py read "
         f"bacpipe_results/{species}/."
     )
 
@@ -93,7 +93,8 @@ def test_audio_dir_holds_every_clip(tmp_path, monkeypatch, species):
 def test_readers_and_writer_agree(species):
     """The stage that writes and the stages that read use the same path."""
     written = f"bacpipe_results/{species}/embeddings"
-    for name in ("src/01b_verify_embeddings.py", "src/03_classify.py"):
+    for name in ("src/01_extract_embeddings.py", "src/03_score_frozen.py",
+                 "src/04_metric_learning.py"):
         text = (ROOT / name).read_text()
         assert 'bacpipe_results/{species}/embeddings' in text, (
             f"{name} no longer reads {written}. Check it against "

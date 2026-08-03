@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 06_leakage_experiment.py
 
@@ -118,7 +118,7 @@ def load_clips():
         if stem not in records:
             continue
         record = records[stem]
-        if str(record.get("session_known")) != "1":
+        if common.is_missing(record.get("recording_id")):
             continue
         if record.get(SUBSET_COLUMN) != SUBSET_VALUE:
             continue

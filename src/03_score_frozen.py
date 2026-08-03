@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 03_classify.py
 
@@ -51,12 +51,12 @@ NOTE ON THE ENCOUNTER METRIC
     known to come from one bird in one recording, which bird is it?
 
     The metric assumes that the calls are already grouped by individual. The
-    assumption is necessary, because 14 of 74 ag recordings and 2 of 211 aa
+    assumption is necessary, because 15 of 76 ag recordings and 2 of 211 aa
     recordings hold calls from two birds. To pool every call in such a
     recording would average two birds into one query.
 
 CAUTION ON THE BASELINE
-    ag is not balanced. The number of calls for each bird runs from 41 to 108.
+    ag is not balanced. The number of calls for each bird runs from 42 to 108.
     The script reports both `chance_inverse_n_birds` and `chance_majority_class`.
     Report the majority-class value. If you report 1/n_birds alone, the result
     looks better than it is.
@@ -170,7 +170,7 @@ def load_embeddings(model_dir, model, master, single_stems):
             continue
 
         record = master[stem]
-        if str(record.get("session_known")) != "1" or record.get("recording_id") in (None, "NA"):
+        if common.is_missing(record.get("recording_id")):
             continue
 
         try:

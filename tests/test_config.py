@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 Tests for config.yaml.
 
@@ -8,7 +8,7 @@ PURPOSE
     missing block with .get() carries on and does nothing.
 
     That happened. An edit to the checkpoints block removed the padding block
-    beside it. 00a_pad_audio.py printed "config.yaml has no padding block.
+    beside it. 00_prepare_data.py printed "config.yaml has no padding block.
     Nothing to do", returned 0, and the run continued with no padded audio.
 
 USAGE

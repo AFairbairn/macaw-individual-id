@@ -1,4 +1,4 @@
-# Individual identification from parrot calls
+﻿# Individual identification from parrot calls
 
 This repository produces every result table in the paper on acoustic individual identification
 in two macaw species. It covers 15 pre-trained embedding models, an MFCC baseline, and a
@@ -184,7 +184,6 @@ same thing. The most important ones are below.
 | **leakage delta** | The random split accuracy minus the by-recording accuracy. |
 
 The rules that govern how this repository is written are in `docs/WRITING_STANDARD.md`.
-`tests/test_writing.py` enforces them.
 
 ---
 
@@ -210,35 +209,35 @@ bird identity and the `recording_id` of every clip. Every later stage reads it.
 
 ```
 macaw-individual-id/
-├── README.md                     This file.
-├── LICENSE                       MIT.
-├── requirements.txt              The five direct dependencies.
-├── config.yaml                   Every analysis choice, in one file.
-├── run_all.sh                    The single entry point.
-├── docs/
-│   ├── GLOSSARY.md               One meaning for every term.
-│   └── WRITING_STANDARD.md       How this repository is written.
-├── src/
-│   ├── 00_build_master_metadata.py
-│   ├── 00a_pad_audio.py
-│   ├── 01a_fetch_checkpoints.py
-│   ├── 01_extract_embeddings.py
-│   ├── 01b_verify_embeddings.py
-│   ├── 02_extract_mfcc.py
-│   ├── 03_classify.py
-│   ├── 04_metric_learning.py
-│   ├── 05_diagnostics.py
-│   ├── 06_leakage_experiment.py
-│   ├── 07_manifest.py
-│   ├── 08_freeze_environment.py
-│   └── 09_supplementary_bouts.py
-├── tests/
-│   ├── test_output_paths.py      Asserts that every model writes where the stages read.
-│   ├── test_padding.py           Asserts that padding changes the length and nothing else.
-│   ├── test_splits.py            Asserts that the split does not leak.
-│   └── test_writing.py           Asserts the writing standard.
-├── data/<sp>/metadata/           The master tables. Tracked here.
-└── results/                      All outputs. Regenerated, never edited by hand.
+â”œâ”€â”€ README.md                     This file.
+â”œâ”€â”€ LICENSE                       MIT.
+â”œâ”€â”€ requirements.txt              The five direct dependencies.
+â”œâ”€â”€ config.yaml                   Every analysis choice, in one file.
+â”œâ”€â”€ run_all.sh                    The single entry point.
+â”œâ”€â”€ docs/
+â”‚   â”œâ”€â”€ GLOSSARY.md               One meaning for every term.
+â”‚   â””â”€â”€ WRITING_STANDARD.md       How this repository is written.
+â”œâ”€â”€ src/
+â”‚   â”œâ”€â”€ 00_build_master_metadata.py
+â”‚   â”œâ”€â”€ 00a_pad_audio.py
+â”‚   â”œâ”€â”€ 01a_fetch_checkpoints.py
+â”‚   â”œâ”€â”€ 01_extract_embeddings.py
+â”‚   â”œâ”€â”€ 01b_verify_embeddings.py
+â”‚   â”œâ”€â”€ 02_extract_mfcc.py
+â”‚   â”œâ”€â”€ 03_classify.py
+â”‚   â”œâ”€â”€ 04_metric_learning.py
+â”‚   â”œâ”€â”€ 05_diagnostics.py
+â”‚   â”œâ”€â”€ 06_leakage_experiment.py
+â”‚   â”œâ”€â”€ 07_manifest.py
+â”‚   â”œâ”€â”€ 08_freeze_environment.py
+â”‚   â””â”€â”€ 09_supplementary_bouts.py
+â”œâ”€â”€ tests/
+â”‚   â”œâ”€â”€ test_config.py            Asserts that no threshold is hard-coded in a script.
+â”‚   â”œâ”€â”€ test_output_paths.py      Asserts that every model writes where the stages read.
+â”‚   â”œâ”€â”€ test_padding.py           Asserts that padding changes the length and nothing else.
+â”‚   â””â”€â”€ test_splits.py            Asserts that the split does not leak.
+â”œâ”€â”€ data/<sp>/metadata/           The master tables. Tracked here.
+â””â”€â”€ results/                      All outputs. Regenerated, never edited by hand.
 ```
 
 ---
@@ -302,8 +301,8 @@ The pipeline reports six metrics for every model.
 5. **Clustering.** KMeans, given the true number of birds. See Section 6.6.
 6. **Encounter accuracy.** See Section 6.5.
 
-Caution: `ag` is not balanced. The number of calls for each bird runs from 41 to 108. Report
-the majority-class baseline (0.108 for `all`, 0.111 for `lab`) next to `1/n_birds`. If you
+Caution: `ag` is not balanced. The number of calls for each bird runs from 42 to 108. Report
+the majority-class baseline (0.107 for `all`, 0.110 for `lab`) next to `1/n_birds`. If you
 report `1/n_birds` alone, the result looks better than it is.
 
 `aa` is balanced at 60 calls for each bird, so `1/n_birds` (0.125) is correct there.
@@ -318,7 +317,7 @@ in one recording, which bird is it?
 
 The metric assumes that the calls have already been grouped by individual. That assumption
 holds when the encounter has one bird, or when source localisation has separated the birds.
-The assumption is necessary here, because 14 of 74 `ag` recordings and 2 of 211 `aa`
+The assumption is necessary here, because 15 of 76 `ag` recordings and 2 of 211 `aa`
 recordings hold calls from two birds. To pool all calls in those recordings would average two
 birds into one query.
 
@@ -364,12 +363,15 @@ pytest tests/
 `tests/test_splits.py` asserts that no `recording_id` appears in both the train set and the
 test set, for every species and every subset.
 
-`tests/test_writing.py` asserts that every comment, docstring and documentation file follows
-`docs/WRITING_STANDARD.md`.
-
 `tests/test_output_paths.py` asserts that stage 1 writes to the directory that stage 1b and
 stage 3 read. `tests/test_padding.py` asserts that a padded clip keeps the sample rate,
-channel count and sample format of its source.
+channel count and sample format of its source. `tests/test_config.py` asserts that no script
+holds a threshold that belongs in `config.yaml`.
+
+Every run also checks itself. After the manifest, `run_all.sh` scores one model twice and
+compares the rows, and stage 5 writes `results/diagnostics/checks.csv`, which records whether
+each claim the paper makes still holds. A run that fails either one still writes its archives,
+and then exits with code 1.
 
 ---
 

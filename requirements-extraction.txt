@@ -1,0 +1,52 @@
+# =============================================================================
+# requirements-extraction.txt
+#
+# PURPOSE
+#   Build the environment for stage 1, which extracts the embeddings. This is
+#   the only stage that imports bacpipe, and the only stage that uses a GPU.
+#
+# USAGE
+#   ./setup.sh builds this environment into .venv-extraction/. Do not install
+#   it by hand, and do not activate it. run_all.sh calls the interpreter of
+#   each profile by its absolute path.
+#
+# PYTHON VERSION
+#   Python 3.11 or newer. bacpipe does not publish a build for 3.10.
+#
+# WHY THIS FILE IS SEPARATE FROM requirements-analysis.txt
+#   bacpipe pins the whole numerical and audio stack, and it pulls torch,
+#   torchaudio, transformers, librosa, numpy, pandas, scipy, scikit-learn and
+#   PyYAML with it. Stages 0 and 2 to 6 import none of bacpipe. Holding them in
+#   one environment made every result table hostage to whatever bacpipe
+#   resolved. On 2026-08-01 that produced a results tree written by two
+#   different stacks. See text/design_2026-08-02_reproducible_run.md.
+#
+# HOW THE VERSIONS GET PINNED
+#   The first build resolves its own versions from the lines below. After the
+#   clean run succeeds, this file is regenerated from
+#   environment.lock/extraction/packages.txt so that every line reads
+#   package==version, and it is committed. A later reader then installs the
+#   exact stack that produced the published numbers.
+#
+# WARNING
+#   Do not run `pip install -U jax[cuda12]`. The -U flag upgrades numpy to
+#   version 2, which breaks bacpipe. The JAX models (perch_bird, perch_v2,
+#   surfperch) run on CPU by design.
+# =============================================================================
+
+# The 13 bacpipe models. This line also brings torch, torchaudio, transformers,
+# librosa, numpy, pandas, scipy, scikit-learn and PyYAML.
+bacpipe
+
+# The ecapa_tdnn model. wavlm_base_plus_sv comes from transformers, above.
+speechbrain
+
+# numpy 2 breaks bacpipe. bacpipe resolves to a 1.x release on its own. This
+# line makes the constraint visible and fails early if that ever changes.
+numpy<2
+
+# The checkpoint download in 01a_fetch_checkpoints.py.
+huggingface_hub
+
+# Tests.
+pytest

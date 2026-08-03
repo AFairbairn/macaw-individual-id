@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 Tests for the train and test split.
 
@@ -40,9 +40,9 @@ def load_master(species):
     """
     path = ROOT / f"data/{species}/metadata/{species}_master.csv"
     if not path.exists():
-        pytest.skip(f"{path} not found. Run src/00_build_master_metadata.py first.")
+        pytest.skip(f"{path} not found. Run src/00_prepare_data.py first.")
     table = pd.read_csv(path, dtype=str)
-    return table[(table["kind"] == "single") & (table["session_known"] == "1")]
+    return table[table["kind"] == "single"]
 
 
 def subsets_for(species):
@@ -88,7 +88,7 @@ def test_no_recording_spans_the_split(species, subset):
 def test_every_fold_is_scored(species, subset):
     """Assert that no fold is dropped.
 
-    03_classify.py skips a fold when the train set does not hold every bird. A
+    03_score_frozen.py skips a fold when the train set does not hold every bird. A
     dropped fold makes the reported standard deviation misleading, because the
     mean then covers fewer folds than the paper states.
     """
@@ -147,7 +147,7 @@ def test_encounter_grouping_is_documented(species):
     matches the value stated in the README, so that a change in the data cannot
     silently invalidate the documented assumption.
     """
-    expected = {"aa": 2, "ag": 14}
+    expected = {"aa": 2, "ag": 15}
     master = load_master(species)
     per_recording = master.groupby("recording_id")["bird"].nunique()
     found = int((per_recording > 1).sum())

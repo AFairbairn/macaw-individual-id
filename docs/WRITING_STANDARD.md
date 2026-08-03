@@ -7,8 +7,10 @@ and not a deep-learning specialist.
 
 The standard follows ASD-STE100 Simplified Technical English, with the additions below.
 
-`tests/test_writing.py` checks rules 1 to 5 automatically. Run `pytest tests/` before every
-commit.
+This is guidance for anyone who edits this repository. Read it before you write a comment, a
+docstring or a documentation file. It is not enforced by a test, because a test cannot judge
+whether a sentence is clear, and a repository that passes a style test is not the same thing
+as a repository a reader can follow.
 
 ---
 
@@ -40,16 +42,16 @@ STAGE 1 of 5   Embedding extraction   [GPU, resumable]
          STAGE 1 of 5   Embedding extraction   [GPU, resumable] took 05:12:44
 ```
 
-The test rejects a hedge word in front of a number (`about 5`, `roughly 200`, `~3`), and it
-rejects a `RUNTIME` heading in any docstring.
+Do not write a hedge word in front of a number (`about 5`, `roughly 200`, `~3`), and do not
+write a `RUNTIME` heading in a docstring.
 
 ## Rule 2. Use the correct term. Define it once.
 
 Every technical term lives in `docs/GLOSSARY.md` with one meaning. The code and the
 manuscript use the same word for the same thing.
 
-Prefer the plain word to the jargon. Section 4 of the glossary lists the banned terms and
-the wording to use instead. The test fails if a banned term appears.
+Prefer the plain word to the jargon. Section 4 of the glossary lists the terms to avoid and
+the wording to use instead.
 
 A term is not banned because it is technical. It is banned because a plain word carries the
 same meaning with less cost to the reader. `EER`, `GroupKFold` and `MFCC` are correct

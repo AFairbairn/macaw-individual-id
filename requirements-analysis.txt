@@ -1,0 +1,57 @@
+# =============================================================================
+# requirements-analysis.txt
+#
+# PURPOSE
+#   Build the environment for stage 0 and stages 2 to 6. These stages score the
+#   embeddings, train the metric-learning head, write the diagnostics and
+#   package the output. None of them imports bacpipe.
+#
+# USAGE
+#   ./setup.sh builds this environment into .venv-analysis/. Do not install it
+#   by hand, and do not activate it. run_all.sh calls the interpreter of each
+#   profile by its absolute path.
+#
+# PYTHON VERSION
+#   Python 3.11 or newer, on Linux or macOS.
+#
+# WHY THIS FILE IS SEPARATE FROM requirements-extraction.txt
+#   Every result table in the paper is written by these stages. Holding them in
+#   the bacpipe environment made all of them hostage to whatever bacpipe
+#   resolved. On 2026-08-01 that produced one results tree written by two
+#   different stacks. See text/design_2026-08-02_reproducible_run.md.
+#
+#   This stack is small and stable, so it pins cleanly and stays pinned.
+#
+# WHY numpy IS NOT CONSTRAINED HERE
+#   requirements-extraction.txt holds numpy below version 2 because bacpipe
+#   needs that. These stages do not. They read the embeddings as .npy files,
+#   which both numpy versions read. The fresh resolution chooses the version,
+#   and step 2 below pins whatever it chose.
+#
+# HOW THE VERSIONS GET PINNED
+#   The first build resolves its own versions from the lines below. After the
+#   clean run succeeds, this file is regenerated from
+#   environment.lock/analysis/packages.txt so that every line reads
+#   package==version, and it is committed. A later reader then installs the
+#   exact stack that produced the published numbers.
+# =============================================================================
+
+# The tables and the numerical work.
+pandas
+scipy
+
+# The probe, the clustering, the folds and every metric in stage 3.
+scikit-learn
+
+# The MFCC baseline in stage 2, and the audio it reads.
+librosa
+soundfile
+
+# The metric-learning head in stage 4. CPU only. See run_all.sh for the reason.
+torch
+
+# config.yaml.
+PyYAML
+
+# Tests.
+pytest

@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # config.yaml
 #
 # PURPOSE
@@ -14,6 +14,41 @@
 # Reproducibility
 # -----------------------------------------------------------------------------
 seed: 42                  # Used by every random operation in the pipeline.
+
+# -----------------------------------------------------------------------------
+# The dataset
+#
+# Where the audio is. The pipeline resolves the dataset in this order and uses
+# the first directory that holds the audio:
+#
+#   1. The --data argument of run_all.sh.
+#   2. The PARROT_DATA variable.
+#   3. This entry.
+#
+# If none of them holds the audio, the run stops and prints every path it tried.
+# There is no default, because a default that resolves to a directory holding no
+# audio reports every file missing instead of naming the real cause.
+#
+# A relative path is read from the repository directory, so this value works
+# whatever directory a stage is started from.
+#
+# A directory is the dataset when it holds both aa/all_calls/single/ and
+# ag/audio/single/. The path may name the package root or the data directory
+# inside it. Both work.
+#
+# CAUTION
+#   The value below is the authors' own folder layout, where the data package
+#   sits beside a clone of this repository. On any other machine it points at
+#   nothing. That is safe, because the run then stops and prints every path it
+#   tried rather than reading a wrong directory, but it is not a value to copy.
+#   Give --data, or set this to where you unpacked the dataset.
+# -----------------------------------------------------------------------------
+dataset_path: ../data_publication/parrot-individual-id-data
+
+# Where the dataset is published. When this is set, the message that reports a
+# missing dataset names it, so a reader is told where to get the data rather
+# than only which paths failed. Set it once the deposit has a DOI.
+dataset_doi:
 
 # -----------------------------------------------------------------------------
 # The species
@@ -286,7 +321,7 @@ clustering:
 # -----------------------------------------------------------------------------
 # Baselines
 #
-# ag is not balanced. The number of calls for each bird runs from 41 to 108.
+# ag is not balanced. The number of calls for each bird runs from 42 to 108.
 # Report the majority-class rate next to 1/n_birds. If you report 1/n_birds
 # alone, the result looks better than it is.
 #

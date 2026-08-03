@@ -19,24 +19,40 @@ WHY THIS SCRIPT EXISTS
     you hope is still correct.
 
 USAGE
-    Record the current environment:
-        python src/08_freeze_environment.py freeze
+    Record the environment of one profile. Run each with that profile's own
+    interpreter, because this script reads the packages of the interpreter that
+    runs it:
 
-    Check the current environment against the record:
-        python src/08_freeze_environment.py verify
+        .venv-extraction/bin/python src/08_freeze_environment.py freeze --profile extraction
+        .venv-analysis/bin/python   src/08_freeze_environment.py freeze --profile analysis
 
-    Check the record, and stop the pipeline if anything differs:
-        python src/08_freeze_environment.py verify --strict
+    Check an environment against its record:
+        python src/08_freeze_environment.py verify --profile analysis
 
 INPUT
-    The installed Python packages of the active environment.
-    The downloaded model weight files of bacpipe.
-    environment.lock/    Verify mode reads the recorded values from here.
+    The installed Python packages of the interpreter that runs this script.
+    The downloaded model weight files of bacpipe, under the extraction profile.
+    environment.lock/<profile>/   Verify mode reads the recorded values here.
 
 OUTPUT
-    environment.lock/packages.txt      Every installed package and its version.
-    environment.lock/model_weights.csv An md5 checksum for every weight file.
-    environment.lock/platform.json     Python, OS, CUDA, and driver versions.
+    environment.lock/<profile>/packages.txt       Every package and its version.
+    environment.lock/<profile>/platform.json      Python, OS, CUDA, env_hash.
+    environment.lock/extraction/model_weights.csv An md5 for every weight file.
+
+WHY THERE ARE TWO PROFILES
+    Stage 1 imports bacpipe, which pins the whole numerical and audio stack.
+    Every other stage imports none of it. Holding both in one environment made
+    every result table hostage to whatever bacpipe resolved, and on 2026-08-01
+    that wrote one results tree from two different stacks.
+
+WHY THE WEIGHTS ARE RECORDED UNDER THE EXTRACTION PROFILE ONLY
+    Only stage 1 reads a model checkpoint. Recording the weights under the
+    analysis profile as well would put a checksum in a record whose environment
+    never opens the file.
+
+    Record them only after every model has produced embeddings. On 2026-07-31 a
+    checksum was recorded for a BEATs checkpoint that could not load, so the
+    record agreed with a file that did not work.
 
 WHEN TO RUN 'freeze'
     Run it once, on the machine that produced the published results. Commit the
@@ -61,11 +77,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-LOCK_DIR = ROOT / "environment.lock"
-PACKAGES = LOCK_DIR / "packages.txt"
-WEIGHTS = LOCK_DIR / "model_weights.csv"
-PLATFORM = LOCK_DIR / "platform.json"
+import common
+
+ROOT = common.ROOT
+LOCK_ROOT = ROOT / "environment.lock"
+
+PROFILES = ["extraction", "analysis"]
+
+# Only stage 1 opens a model checkpoint, and stage 1 runs in the extraction
+# profile. See WHY THE WEIGHTS ARE RECORDED UNDER THE EXTRACTION PROFILE ONLY.
+WEIGHTS_PROFILE = "extraction"
+
+
+def lock_dir(profile):
+    """Return the directory that holds the record of one profile."""
+    return LOCK_ROOT / profile
 
 CHUNK_BYTES = 1 << 20  # Read 1 MiB at a time, so large files do not fill memory.
 
@@ -88,32 +114,11 @@ def md5_of(path):
     return digest.hexdigest()
 
 
-def installed_packages():
-    """Return every installed package as one 'name==version' line.
-
-    The list comes from importlib.metadata, which is part of the standard
-    library and reads the same installed metadata that pip reads. A virtual
-    environment made by uv holds no pip, so `pip freeze` fails there, and it is
-    the tool this project uses to get Python 3.11 on a machine that ships 3.10.
-
-    importlib.metadata is also the more useful record. `pip freeze` writes
-    'package @ file:///path/to/wheel' for a locally built wheel and
-    '-e git+...' for an editable install, so its output carries paths from the
-    machine that produced it and can never match on another one.
-
-    The name is normalised the way the packaging standard defines, so two
-    machines that spell a name differently still compare equal.
-    """
-    from importlib import metadata
-
-    seen = {}
-    for distribution in metadata.distributions():
-        name = distribution.metadata["Name"]
-        if not name:
-            continue
-        key = re.sub(r"[-_.]+", "-", name).lower()
-        seen[key] = f"{key}=={distribution.version}"
-    return sorted(seen.values())
+# The package list and the hash of it come from common, so that the record this
+# script writes and the stamp every result row carries are the same thing
+# computed the same way.
+installed_packages = common.installed_packages
+env_hash = common.env_hash
 
 
 def weight_search_paths():
@@ -178,8 +183,13 @@ def find_weight_files():
 
 
 def platform_record():
-    """Return the platform details that affect a numerical result."""
+    """Return the platform details that affect a numerical result.
+
+    env_hash is the md5 of the sorted package list. Every result row carries the
+    same value, so a table can be traced to the record that describes it.
+    """
     record = {
+        "env_hash": env_hash(),
         "python": sys.version.split()[0],
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -201,41 +211,51 @@ def platform_record():
     return record
 
 
-def do_freeze():
-    """Write the current environment to the lock directory."""
-    LOCK_DIR.mkdir(exist_ok=True)
+def do_freeze(profile):
+    """Write the environment of one profile to its lock directory."""
+    directory = lock_dir(profile)
+    directory.mkdir(parents=True, exist_ok=True)
 
     packages = installed_packages()
-    PACKAGES.write_text("\n".join(packages) + "\n")
+    (directory / "packages.txt").write_text("\n".join(packages) + "\n")
+
+    record = platform_record()
+    (directory / "platform.json").write_text(json.dumps(record, indent=2) + "\n")
+
+    print(f"Wrote {directory}")
+    print(f"  packages.txt        {len(packages)} packages")
+    print(f"  platform.json       env_hash {record['env_hash'][:12]}, {record['platform']}")
+
+    if profile != WEIGHTS_PROFILE:
+        return
 
     weights = find_weight_files()
-    with open(WEIGHTS, "w", newline="") as handle:
+    with open(directory / "model_weights.csv", "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["path", "bytes", "md5"])
         writer.writeheader()
         writer.writerows(weights)
-
-    PLATFORM.write_text(json.dumps(platform_record(), indent=2) + "\n")
-
-    print(f"Wrote {LOCK_DIR}")
-    print(f"  packages.txt        {len(packages)} packages")
     print(f"  model_weights.csv   {len(weights)} weight files")
-    print(f"  platform.json       {platform_record()['platform']}")
 
     if not weights:
         print()
-        print("  Warning: no weight files were found.")
-        print("  Run this script after stage 1 has downloaded the models.")
+        print("  Warning: no weight file was found.")
+        print("  Run this after stage 1 has produced the embeddings, so that")
+        print("  every recorded checksum describes a file that works.")
 
 
-def do_verify(strict):
-    """Compare the current environment against the lock directory.
+def do_verify(profile, strict):
+    """Compare the running environment against the record of one profile.
 
-    The function returns 0 when everything matches. It returns 1 when something
-    differs and --strict is set.
+    The function returns 0 when everything matches, and 1 when it does not.
+    run_all.sh stops the run on a 1, unless --allow-env-drift was given.
     """
+    directory = lock_dir(profile)
+    PACKAGES = directory / "packages.txt"
+    WEIGHTS = directory / "model_weights.csv"
+
     if not PACKAGES.exists():
-        print(f"No record found at {LOCK_DIR}.")
-        print("Create one with: python src/08_freeze_environment.py freeze")
+        print(f"No record found at {directory}.")
+        print(f"Create one with: python src/08_freeze_environment.py freeze --profile {profile}")
         return 1 if strict else 0
 
     problems = []
@@ -305,33 +325,34 @@ def do_verify(strict):
             print()
 
     if not problems:
-        print("The environment matches the record.")
         return 0
 
-    print(f"SUMMARY: {', '.join(problems)}")
-    if strict:
-        print("Stopping, because --strict is set.")
-        return 1
-    print("Continuing. Results can differ from the published values.")
-    return 0
+    print(f"SUMMARY: {', '.join(problems)} in the {profile} environment.")
+    return 1
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Record or verify the software and the model weights."
+        description="Record or verify the software and the model weights of one profile."
     )
     parser.add_argument("action", choices=["freeze", "verify"])
     parser.add_argument(
+        "--profile",
+        required=True,
+        choices=PROFILES,
+        help="Which environment. Run this with that profile's own interpreter.",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
-        help="Exit with code 1 if the environment differs from the record.",
+        help="Treat a missing record as a difference, rather than as nothing to compare.",
     )
     args = parser.parse_args()
 
     if args.action == "freeze":
-        do_freeze()
+        do_freeze(args.profile)
         return 0
-    return do_verify(args.strict)
+    return do_verify(args.profile, args.strict)
 
 
 if __name__ == "__main__":

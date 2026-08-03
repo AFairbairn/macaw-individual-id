@@ -78,5 +78,6 @@ reader who meets it elsewhere can map it onto this project.
 | fine-tune | continue training the model itself, not only the head |
 | zero-shot | used with no training on our data |
 
-`tests/test_writing.py` fails if a term in the left column appears in any comment,
-docstring, or documentation file.
+Use the wording in the right column in a comment, a docstring or a documentation file. The
+term in the left column is not wrong, but the plain wording carries the same meaning at less
+cost to a reader who studies bird behaviour rather than machine learning.

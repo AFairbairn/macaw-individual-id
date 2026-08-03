@@ -55,8 +55,9 @@ CAUTION
 WARNING
     Do not run `pip install -U jax[cuda12]` to make the JAX models use the GPU.
     The -U flag upgrades numpy to version 2, which breaks the pinned torch and
-    bacpipe environment. To repair a broken environment, delete it and rebuild
-    it from requirements.txt.
+    bacpipe environment. To repair a broken environment, delete it and build it
+    again:
+        rm -rf .venv-extraction && ./setup.sh extraction
 
 NOTE
     bacpipe prints many tracebacks after it writes the embeddings. Those
@@ -65,7 +66,12 @@ NOTE
     src/01b_verify_embeddings.py instead, which counts the output files.
 """
 import argparse
+import hashlib
 import os
+import shutil
+import sys
+import tarfile
+import zipfile
 from pathlib import Path
 
 # BirdNET ships a Keras 3 checkpoint. Set this before TensorFlow is imported.
@@ -74,9 +80,10 @@ os.environ["TF_USE_LEGACY_KERAS"] = "0"
 import numpy as np  # noqa: E402
 import yaml  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
-CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
-DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
+import common  # noqa: E402
+
+ROOT = common.ROOT
+CONFIG = common.CONFIG
 PADDED = ROOT / "audio_padded"
 
 # The 13 models that bacpipe provides.
@@ -352,6 +359,301 @@ def run_speech_models(audio_dir, device, wanted=None, clear=False):
                 print(f"  {index}/{len(files)}", flush=True)
 
 
+# =============================================================================
+# The checkpoint check, before extraction
+#
+# bacpipe decides whether to download a checkpoint by one test: does the
+# directory of that model exist and hold at least one file. A download that
+# stopped part of the way through leaves a short file, so the test passes and
+# bacpipe never downloads again. The model then fails on every run, with an
+# error that names the file format rather than the cause.
+#
+# That happened here. A download stopped when the disk quota ran out and left
+# 113,246,208 bytes of a 363,145,291 byte BEATs checkpoint, and the run of
+# 2026-07-31 13:23 died on it.
+#
+# NOTHING IS DELETED UNLESS IT IS ASKED FOR
+#     An earlier version deleted the directory of any model whose checkpoint
+#     would not open. That is the wrong default. A model directory holds
+#     hundreds of megabytes, and deleting it commits the user to downloading it
+#     again on a machine that may have no network, or the same full disk that
+#     truncated the file in the first place. A download that failed once fails
+#     again for the same reason.
+#
+#     So this reports, and stops the run. --repair-checkpoints deletes the
+#     broken copies, and the user decides when to use it.
+# =============================================================================
+
+# The default in the bacpipe settings file, used when that file cannot be read.
+DEFAULT_CHECKPOINT_BASE = "bacpipe_model_checkpoints"
+
+# The two speech models come from their own libraries and cache elsewhere, and
+# the MFCC variants have no checkpoint at all.
+NOT_FROM_BACPIPE = set(SPEECH_MODELS) | {"mfcc_lakdari", "mfcc_full", "mfcc_cmvn"}
+
+
+def panel_models():
+    """Return the models in config.yaml whose checkpoint bacpipe downloads."""
+    return [name for name in CONFIG["models"] if name not in NOT_FROM_BACPIPE]
+
+
+def checkpoint_root():
+    """Return the directory bacpipe reads its checkpoints from.
+
+    bacpipe reads model_base_path from settings.yaml inside its own installed
+    package. This reads the same setting, so it checks the directory bacpipe
+    reads, whatever that value is. The resolved path is printed, because a check
+    of the wrong directory reports success and means nothing.
+    """
+    try:
+        import bacpipe
+    except ImportError:
+        return ROOT / DEFAULT_CHECKPOINT_BASE
+
+    settings = Path(bacpipe.__file__).parent / "settings.yaml"
+    base = DEFAULT_CHECKPOINT_BASE
+    if settings.is_file():
+        loaded = yaml.safe_load(settings.read_text()) or {}
+        base = loaded.get("model_base_path", DEFAULT_CHECKPOINT_BASE)
+
+    path = Path(base)
+    return path if path.is_absolute() else ROOT / path
+
+
+def sha256_of(path):
+    """Return the sha256 checksum of one file."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def open_problem(path):
+    """Open one file with the reader its format needs.
+
+    Return an empty string when the file opens, the word 'unchecked' when this
+    does not know the format, or a message when the file will not open.
+    """
+    suffix = path.suffix.lower()
+
+    if suffix in (".pt", ".pth", ".ckpt"):
+        try:
+            import torch
+        except ImportError:
+            return "unchecked"
+        try:
+            torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as error:
+            return f"{type(error).__name__}: {error}"
+        return ""
+
+    if suffix in (".keras", ".zip"):
+        return "" if zipfile.is_zipfile(path) else "not a valid zip archive"
+
+    if suffix in (".xz", ".gz", ".bz2", ".tar"):
+        try:
+            with tarfile.open(path) as archive:
+                archive.getmembers()
+        except Exception as error:
+            return f"{type(error).__name__}: {error}"
+        return ""
+
+    return "unchecked"
+
+
+def recorded_checksums():
+    """Return the sha256 recorded in config.yaml, keyed by relative path."""
+    recorded = {}
+    for entry in (CONFIG.get("checkpoints") or {}).values():
+        recorded.update(entry.get("sha256") or {})
+    return recorded
+
+
+def check_one_checkpoint(root, model, checksums):
+    """Check one model. Return (state, [messages]).
+
+    The state is 'ok', 'absent', 'broken' or 'unchecked'.
+    """
+    directory = root / model
+    if not directory.is_dir():
+        return "absent", ["no directory. bacpipe downloads it when this stage runs."]
+
+    files = [p for p in sorted(directory.rglob("*"))
+             if p.is_file() and ".cache" not in p.parts]
+    if not files:
+        return "absent", ["the directory is empty."]
+
+    messages, opened, unchecked = [], 0, 0
+    for path in files:
+        relative = path.relative_to(root).as_posix()
+
+        expected = checksums.get(relative)
+        if expected and sha256_of(path) != expected:
+            messages.append(f"{relative}: the checksum does not match config.yaml.")
+            continue
+
+        problem = open_problem(path)
+        if problem == "unchecked":
+            unchecked += 1
+        elif problem:
+            messages.append(f"{relative}: {problem} ({path.stat().st_size} bytes)")
+        else:
+            opened += 1
+
+    if messages:
+        return "broken", messages
+    if opened == 0:
+        return "unchecked", [f"{unchecked} file(s), none of a format this reads."]
+    return "ok", [f"{opened} file(s) opened" + (f", {unchecked} unchecked" if unchecked else "")]
+
+
+def check_checkpoints(repair=False):
+    """Check every checkpoint. Return True when the run may continue."""
+    root = checkpoint_root()
+    print(f"Checkpoint directory: {root}")
+    if not root.is_dir():
+        print("  No checkpoint has been downloaded yet.")
+        print("  bacpipe downloads what it needs when it runs.")
+        return True
+
+    checksums = recorded_checksums()
+    results = {model: check_one_checkpoint(root, model, checksums)
+               for model in panel_models()}
+
+    for model, (state, messages) in results.items():
+        label = {"ok": "ok       ", "absent": "absent   ",
+                 "broken": "BROKEN   ", "unchecked": "unchecked"}[state]
+        print(f"  {label} {model:<20} {messages[0]}")
+        for line in messages[1:]:
+            print(f"           {' ' * 20} {line}")
+
+    broken = [m for m, (state, _) in results.items() if state == "broken"]
+    if not broken:
+        print(f"  {len(results)} model(s) checked. Every checkpoint present opens.")
+        return True
+
+    print()
+    print(f"{len(broken)} checkpoint(s) will not open: {', '.join(broken)}")
+    print()
+
+    if not repair:
+        print("This stage would fail on those models and write no embedding for them.")
+        print("Nothing has been deleted. Choose one:")
+        print()
+        print("  1. Free the disk space or restore the network, then delete the")
+        print("     broken copies so bacpipe fetches them again:")
+        print("       python src/01_extract_embeddings.py --species aa --repair-checkpoints")
+        print()
+        print("  2. Copy a working checkpoint into the directory by hand.")
+        print()
+        print("A download that failed once fails again for the same reason. On")
+        print("2026-07-31 the disk quota ran out part of the way through the BEATs")
+        print("checkpoint. Check the free space before you repair.")
+        return False
+
+    for model in broken:
+        # bacpipe decides whether to download by whether the directory exists
+        # and holds a file, so one file left behind stops the download.
+        target = root / model
+        print(f"  removing {target}")
+        shutil.rmtree(target, ignore_errors=True)
+
+    print()
+    print(f"{len(broken)} model directory removed. bacpipe downloads them when")
+    print("this stage runs. Run the pipeline again.")
+    return False
+
+
+# =============================================================================
+# The count check, after extraction
+#
+# bacpipe prints many tracebacks after it writes the embeddings. Those come from
+# a dashboard step this pipeline does not use, and the embeddings are already on
+# disk when they appear. A traceback therefore does not mean the extraction
+# failed, and a clean log does not mean it succeeded. One model can write zero
+# files while the log looks normal, which is what avesecho_passt does on CUDA.
+#
+# Count the files. Do not read the log.
+# =============================================================================
+
+EXPECTED_MODEL_COUNT = 15
+
+
+def expected_stems(species):
+    """Return the clip stems that the master table lists for one species."""
+    return set(common.read_master(species)["original_stem"])
+
+
+def found_stems(directory, model):
+    """Return the clip stems that one model wrote."""
+    suffix = f"_{model}.npy"
+    return {path.name[: -len(suffix)] for path in directory.rglob(f"*{suffix}")}
+
+
+def check_species_counts(species):
+    """Report every model of one species. Return True when all are complete."""
+    root = ROOT / f"bacpipe_results/{species}/embeddings"
+    print(f"\n=== {species} ===")
+
+    if not root.exists():
+        print(f"  {root} not found.")
+        return False
+
+    expected = expected_stems(species)
+    print(f"  The master table lists {len(expected)} clips.")
+
+    directories = sorted(d for d in root.iterdir() if d.is_dir() and "___" in d.name)
+    if not directories:
+        print("  No model directory found.")
+        return False
+
+    all_complete = True
+    for directory in directories:
+        model = directory.name.split("___")[1].rsplit("-", 1)[0]
+        found = found_stems(directory, model)
+        missing = expected - found
+
+        if not found:
+            # This is the avesecho_passt on CUDA case.
+            print(f"  {model:22} FAILED. The model wrote no file.")
+            all_complete = False
+        elif missing:
+            print(f"  {model:22} INCOMPLETE. {len(found)}/{len(expected)} clips.")
+            for stem in sorted(missing)[:3]:
+                print(f"  {'':22}   missing: {stem}")
+            if len(missing) > 3:
+                print(f"  {'':22}   and {len(missing) - 3} more")
+            all_complete = False
+        else:
+            print(f"  {model:22} complete. {len(found)} clips.")
+
+    if len(directories) < EXPECTED_MODEL_COUNT:
+        print(f"  Only {len(directories)} of {EXPECTED_MODEL_COUNT} models are present.")
+        all_complete = False
+
+    return all_complete
+
+
+def verify_counts(species_list):
+    """Count the output of every model. Return True when every one is complete."""
+    print("\nCounting the extracted embeddings.")
+    print("A traceback above does not mean the extraction failed. This counts files.")
+    results = [check_species_counts(species) for species in species_list]
+
+    print()
+    if all(results):
+        print("Every model is complete.")
+        return True
+    print("One or more models are incomplete. See the report above.")
+    print("To recompute one model, run this stage with --models <name>.")
+    return False
+
+
+# =============================================================================
+# Entry point
+# =============================================================================
+
 def main():
     parser = argparse.ArgumentParser(description="Compute the embeddings of all 15 models.")
     parser.add_argument("--species", required=True, choices=CONFIG["species"])
@@ -379,7 +681,18 @@ def main():
             "The default is every model."
         ),
     )
+    parser.add_argument(
+        "--repair-checkpoints",
+        action="store_true",
+        help="Delete the directory of every model whose checkpoint will not open.",
+    )
     args = parser.parse_args()
+
+    # Check the checkpoints before anything is extracted. A model whose
+    # checkpoint will not open writes no embedding, and bacpipe reports that as
+    # a traceback that looks like every other traceback it prints.
+    if not check_checkpoints(repair=args.repair_checkpoints):
+        return 1
 
     wanted = None
     if args.models:
@@ -415,8 +728,18 @@ def main():
     run_bacpipe_models(audio_dir, device, wanted, clear)
     run_speech_models(audio_dir, device, wanted, clear)
 
-    print("Extraction finished. Now run src/01b_verify_embeddings.py.", flush=True)
+    # The embeddings carry the environment that produced them. Stage 3 and later
+    # read this and stop if the feature sets disagree, which is the fault that
+    # went unnoticed on 2026-08-01.
+    common.write_provenance(ROOT / f"bacpipe_results/{args.species}/embeddings")
+
+    # Count the files. See the comment above check_species_counts.
+    if not verify_counts([args.species]):
+        return 1
+
+    print("Extraction finished, and every model wrote a file for every clip.", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

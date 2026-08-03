@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 05_diagnostics.py
 
@@ -208,7 +208,7 @@ def load_clips(species, model):
             continue
 
         record = records[stem]
-        if str(record.get("session_known")) != "1" or record.get("recording_id") in (None, "NA"):
+        if common.is_missing(record.get("recording_id")):
             continue
 
         matrix = np.atleast_2d(np.load(path))
@@ -458,7 +458,7 @@ def split_structure(species):
     """
     path = ROOT / f"data/{species}/metadata/{species}_master.csv"
     table = pd.read_csv(path, dtype=str)
-    table = table[(table["kind"] == "single") & (table["session_known"] == "1")]
+    table = table[table["kind"] == "single"]
 
     # config.yaml defines the subsets. Stage 3 and stage 4 read the same
     # block, so one edit there changes every stage.
