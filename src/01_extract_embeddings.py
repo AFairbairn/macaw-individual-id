@@ -507,7 +507,7 @@ def check_one_checkpoint(root, model, checksums):
     if not files:
         return "absent", ["the directory is empty."]
 
-    messages, opened, unchecked = [], 0, 0
+    messages, warnings, opened, unchecked = [], [], 0, 0
     for path in files:
         relative = path.relative_to(root).as_posix()
 
@@ -520,15 +520,29 @@ def check_one_checkpoint(root, model, checksums):
         if problem == "unchecked":
             unchecked += 1
         elif problem:
-            messages.append(f"{relative}: {problem} ({path.stat().st_size} bytes)")
+            warnings.append(f"{relative}: {problem} ({path.stat().st_size} bytes)")
         else:
             opened += 1
 
+    # A recorded checksum that does not match is always fatal.
     if messages:
         return "broken", messages
+
+    # A file that will not open is fatal only when nothing here opens. Some
+    # upstream archives ship more than one model variant, plus leftovers:
+    # birdaves_especies extracts biox-large.pt, which bacpipe loads, and also
+    # bioxn-large.pt and a truncated .tar.xz, which it never reads. Condemning
+    # the model for those stopped a run whose weights were fine, and a fresh
+    # download reproduces it every time.
     if opened == 0:
+        if warnings:
+            return "broken", warnings
         return "unchecked", [f"{unchecked} file(s), none of a format this reads."]
-    return "ok", [f"{opened} file(s) opened" + (f", {unchecked} unchecked" if unchecked else "")]
+
+    summary = f"{opened} file(s) opened" + (f", {unchecked} unchecked" if unchecked else "")
+    if warnings:
+        return "ok", [summary + f", {len(warnings)} unused file(s) will not open"] + warnings
+    return "ok", [summary]
 
 
 def check_checkpoints(repair=False):

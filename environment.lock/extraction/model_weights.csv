@@ -1,0 +1,15 @@
+path,bytes,md5
+.cache/huggingface/hub/models--DBD-research-group--AudioProtoPNet-5-BirdSet-XCL/snapshots/9877d4a7f549efe1519f0c9080780a40b9710468/model.safetensors,549920272,8d3959e736983dbd7b526279f37e8329
+.cache/huggingface/hub/models--DBD-research-group--Bird-MAE-Huge/snapshots/61106f4d15a61fce956faef80cf17894e1ab9a48/model.safetensors,2521407320,6f7de68a6fe1bfa11cb44aabd57ee206
+.cache/huggingface/hub/models--DBD-research-group--ConvNeXT-Base-BirdSet-XCL/snapshots/136d36f4e29cb7f1b79309cc6f94a468aaa62622/model.safetensors,390208528,c72fcacb4d917e5d4563507ac4b1c637
+.cache/huggingface/hub/models--davidrrobinson--BioLingual/snapshots/808bb50859ce7d0c0fcc2b233676c7ba9319107e/pytorch_model.bin,614525833,b2769d30a21be54edc363a6a9821a0f2
+.cache/huggingface/hub/models--davidrrobinson--BioLingual/snapshots/9d67e087797e325059f04a0a3de669441a47cb9d/model.safetensors,614431440,8ab371d8dc7bdfecda1f62f69e22b079
+.cache/huggingface/hub/models--microsoft--wavlm-base-plus-sv/snapshots/1bfd64eca136543feb28c5ffaf05381c6af33121/model.safetensors,404479908,1cb84ca8d266646e6f769c6232bcf1c8
+.cache/huggingface/hub/models--microsoft--wavlm-base-plus-sv/snapshots/feb593a6c23c1cc3d9510425c29b0a14d2b07b1e/pytorch_model.bin,404547053,fde4d7bc1af11107700bf5c9a26481f0
+.cache/huggingface/hub/models--speechbrain--spkrec-ecapa-voxceleb/snapshots/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/classifier.ckpt,5534328,8124a3a477e850412bc808cd98f1757e
+.cache/huggingface/hub/models--speechbrain--spkrec-ecapa-voxceleb/snapshots/0f99f2d0ebe89ac095bcc5903c4dd8f72b367286/embedding_model.ckpt,83316686,fffa99c888d1d6cc0a2fb1b8c13b22eb
+.cache/kagglehub/models/google/bird-vocalization-classifier/tensorFlow2/bird-vocalization-classifier/8/saved_model.pb,3881694,5de59efe26bb1a3515e42342bd23f649
+.cache/kagglehub/models/google/surfperch/tensorFlow2/1/1/saved_model.pb,3859615,ef14daf727c192ff9ec0247dc7ed00c1
+.cache/torch/hub/checkpoints/passt-s-kd-ap.486.pt,344665670,c9a23a44fba05954fb39581855016486
+.cache/torch/hub/checkpoints/vggish-10086976.pth,288567937,dfb1f4664655b45d75da2b3147e14d47
+.cache/torch/hub/checkpoints/vggish_pca_params-970ea276.pth,181358,d4bb77e65223aaefbe978049efec57f3
