@@ -89,6 +89,8 @@ from sklearn.metrics import (
 from sklearn.model_selection import GroupKFold, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler, normalize
 
+import common
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 

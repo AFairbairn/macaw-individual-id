@@ -147,6 +147,8 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import GroupKFold, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler, normalize
 
+import common
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))

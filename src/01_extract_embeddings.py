@@ -225,6 +225,29 @@ def run_bacpipe_models(audio_dir, device, wanted=None, clear=False):
         bacpipe.config.models = [model]
         bacpipe.config.dim_reduction_model = "None"
 
+        # The device and the classifier are set here, on the live config, and
+        # not only in settings.yaml.
+        #
+        # bacpipe reads settings.yaml once, when it is imported. The import is
+        # above this loop, so a value written to that file afterwards is never
+        # read. On 2026-08-03 the file held device: 'cuda' for a whole run while
+        # every torch model ran on CPU, and the run took hours longer than it
+        # needed to on a node that had been queued for. The file write is kept,
+        # because it is what a later import in a new process reads.
+        bacpipe.config.device = model_device
+        bacpipe.config.run_pretrained_classifier = False
+        bacpipe.config.save_raven_tables = False
+
+        # Say which device is in force. A run that silently drops to CPU is the
+        # fault this stage is least able to notice and most expensive to repeat.
+        effective = getattr(bacpipe.config, "device", "unknown")
+        if str(effective) != str(model_device):
+            print(
+                f"  WARNING: asked for {model_device} and bacpipe holds "
+                f"{effective}. The model will not use the device you asked for.",
+                flush=True,
+            )
+
         # Turn off the dashboard step. This pipeline reads only the .npy files.
         # An older bacpipe can lack these settings, so each one is set
         # separately and a failure is ignored.

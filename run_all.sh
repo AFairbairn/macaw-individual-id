@@ -133,9 +133,7 @@ wanted() { [[ "$1" -ge "$FIRST_STAGE" && "$1" -le "$LAST_STAGE" ]]; }
 # every result and therefore every checksum in results/MANIFEST.csv. Section 7
 # of the README asks the reader to compare those checksums, so they have to be
 # reproducible across machines.
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
+# These are exported after stage 1, not here. See ONE THREAD, AND WHERE below.
 
 # Read and write UTF-8, whatever the locale of the machine.
 export PYTHONUTF8=1
@@ -330,6 +328,27 @@ if wanted 1; then
   done
   end_stage
 fi
+
+# =============================================================================
+# ONE THREAD, AND WHERE
+#
+# A reduction runs in a different order on a machine with a different core
+# count, which changes the last digits of every result and therefore every
+# checksum in results/MANIFEST.csv. Section 7 of the README asks the reader to
+# compare those checksums, so the stages that produce them run on one thread.
+#
+# Those stages are 2 to 6. Stage 1 is not one of them. It writes embeddings,
+# each model reads its own, and no checksum in the manifest depends on how many
+# threads a model used.
+#
+# This was exported at the top of the script until 2026-08-03. Five of the
+# fifteen models run only on CPU, so the whole extraction ran single threaded on
+# a node with many cores, and stage 1 took hours longer than it needed to. That
+# is expensive on a machine you have to queue for.
+# =============================================================================
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
 
 # =============================================================================
 if wanted 2; then

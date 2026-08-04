@@ -130,6 +130,8 @@ from sklearn.model_selection import GroupKFold  # noqa: E402
 from sklearn.neighbors import KNeighborsClassifier  # noqa: E402
 from sklearn.preprocessing import StandardScaler, normalize  # noqa: E402
 
+import common
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
