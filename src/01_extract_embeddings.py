@@ -159,17 +159,32 @@ BACPIPE_SETTINGS = {
 }
 
 
+def bacpipe_settings_path():
+    """Return the settings.yaml of the installed bacpipe package.
+
+    The path is found without importing bacpipe. bacpipe reads settings.yaml
+    once, when it is first imported, and its models read their settings from
+    that first read. So the file must be written before the first import.
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec("bacpipe")
+    if spec is None or spec.origin is None:
+        return None
+    return Path(spec.origin).parent / "settings.yaml"
+
+
 def set_bacpipe_device(device):
     """Write the settings this pipeline requires into the bacpipe package.
 
-    The function runs before every model, so a reinstall of bacpipe between
+    main calls this once before bacpipe is first imported, and the model loop
+    calls it again before every model, so a reinstall of bacpipe between
     models cannot leave the run on CPU or turn the classifier back on.
     """
     import re
-    import bacpipe
 
-    path = Path(bacpipe.__file__).parent / "settings.yaml"
-    if not path.is_file():
+    path = bacpipe_settings_path()
+    if path is None or not path.is_file():
         return
 
     text = path.read_text()
@@ -237,6 +252,16 @@ def run_bacpipe_models(audio_dir, device, wanted=None, clear=False):
         bacpipe.config.device = model_device
         bacpipe.config.run_pretrained_classifier = False
         bacpipe.config.save_raven_tables = False
+
+        # The models read bacpipe.settings, not bacpipe.config. Stop if the
+        # classifier is on there, because then every clip of every model with
+        # a classifier is skipped. See the comment above BACPIPE_SETTINGS.
+        for key in BACPIPE_SETTINGS:
+            if getattr(bacpipe.settings, key, False):
+                raise SystemExit(
+                    f"bacpipe.settings.{key} is True. bacpipe read its settings "
+                    "before this script wrote them. Run this stage again."
+                )
 
         # Say which device is in force. A run that silently drops to CPU is the
         # fault this stage is least able to notice and most expensive to repeat.
@@ -725,6 +750,18 @@ def main():
     )
     args = parser.parse_args()
 
+    device = args.device
+    if not device:
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
+
+    # Write the settings before anything imports bacpipe. The checkpoint check
+    # below is the first import.
+    set_bacpipe_device(device)
+
     # Check the checkpoints before anything is extracted. A model whose
     # checkpoint will not open writes no embedding, and bacpipe reports that as
     # a traceback that looks like every other traceback it prints.
@@ -741,14 +778,6 @@ def main():
                 f"Unknown model name(s): {', '.join(unknown)}. "
                 f"Known models: {', '.join(sorted(known))}"
             )
-
-    device = args.device
-    if not device:
-        try:
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        except ImportError:
-            device = "cpu"
 
     audio_dir = audio_dir_for(args.species)
     print(f"Species: {args.species}", flush=True)

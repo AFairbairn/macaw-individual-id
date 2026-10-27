@@ -202,6 +202,7 @@ wanted 1 && PROFILES=(extraction analysis)
 # =============================================================================
 check_environment() {
   local profile="$1" interpreter="$2"
+  shift 2
   local lock="environment.lock/${profile}/packages.txt"
 
   if [[ ! -f "$lock" ]]; then
@@ -209,7 +210,7 @@ check_environment() {
     return 0
   fi
 
-  if "$interpreter" src/freeze_environment.py verify --profile "$profile"; then
+  if "$interpreter" src/freeze_environment.py verify --profile "$profile" "$@"; then
     echo "  ${profile}: matches ${lock}"
     return 0
   fi
@@ -232,7 +233,9 @@ To continue anyway, and record that you did:
 }
 
 say "Environment record"
-wanted 1 && check_environment extraction "$PY_EXTRACTION"
+# Stage 1 downloads the weights, so absent weights are listed here and checked
+# after stage 1.
+wanted 1 && check_environment extraction "$PY_EXTRACTION" --missing-weights-ok
 check_environment analysis "$PY_ANALYSIS"
 
 # =============================================================================
@@ -326,6 +329,8 @@ if wanted 1; then
       --species "$sp" --device "$DEVICE" --clear \
       || die "Extraction failed for ${sp}. See the output above."
   done
+  say "Environment record, with the downloaded weights"
+  check_environment extraction "$PY_EXTRACTION"
   end_stage
 fi
 

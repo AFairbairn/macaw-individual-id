@@ -34,8 +34,12 @@ table hostage to whatever bacpipe resolved.
 
 | Environment | Built from | Used by |
 |---|---|---|
-| `.venv-extraction/` | `requirements-extraction.txt` | stage 1 |
-| `.venv-analysis/` | `requirements-analysis.txt` | stages 0 and 2 to 6 |
+| `.venv-extraction/` | `environment.lock/extraction/packages.txt` | stage 1 |
+| `.venv-analysis/` | `environment.lock/analysis/packages.txt` | stages 0 and 2 to 6 |
+
+Each record pins every package to the version that produced the published results.
+When a record is absent, `setup.sh` installs `requirements-<profile>.txt` instead, which
+names the packages without versions.
 
 Neither is ever activated, by this pipeline or by you. `run_all.sh` calls each stage with the
 absolute path of its interpreter. The extraction environment is built only when stage 1 is in

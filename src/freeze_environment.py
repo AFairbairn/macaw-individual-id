@@ -243,10 +243,14 @@ def do_freeze(profile):
         print("  every recorded checksum describes a file that works.")
 
 
-def do_verify(profile, strict):
+def do_verify(profile, strict, missing_weights_ok=False):
     """Compare the running environment against the record of one profile.
 
     The function returns 0 when everything matches, and 1 when it does not.
+    With missing_weights_ok, a weight file that is absent is listed but is not
+    a difference. Stage 1 downloads absent weights, so run_all.sh uses this
+    before stage 1 and checks again without it after stage 1. A weight file
+    that is present and differs is always a difference.
     run_all.sh stops the run on a 1, unless --allow-env-drift was given.
     """
     directory = lock_dir(profile)
@@ -306,8 +310,11 @@ def do_verify(profile, strict):
         )
 
         if missing:
-            problems.append(f"{len(missing)} weight file(s) missing")
+            if not missing_weights_ok:
+                problems.append(f"{len(missing)} weight file(s) missing")
             print("MISSING WEIGHT FILES")
+            if missing_weights_ok:
+                print("  Stage 1 downloads these. They are checked after stage 1.")
             for path in missing[:10]:
                 print(f"  {path}")
             print()
@@ -347,12 +354,17 @@ def main():
         action="store_true",
         help="Treat a missing record as a difference, rather than as nothing to compare.",
     )
+    parser.add_argument(
+        "--missing-weights-ok",
+        action="store_true",
+        help="List absent weight files without treating them as a difference.",
+    )
     args = parser.parse_args()
 
     if args.action == "freeze":
         do_freeze(args.profile)
         return 0
-    return do_verify(args.profile, args.strict)
+    return do_verify(args.profile, args.strict, args.missing_weights_ok)
 
 
 if __name__ == "__main__":

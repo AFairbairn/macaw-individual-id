@@ -89,17 +89,24 @@ md5_of() {
 # build_profile
 #
 # Build one environment. The steps are:
-#   1. If the stamp matches the requirements file, do nothing.
-#   2. Create the environment if the directory is absent.
-#   3. Install the requirements file.
-#   4. Write the stamp.
+#   1. Choose the file to install. That is environment.lock/<profile>/packages.txt
+#      when it exists, because it pins every package, pip included, to the
+#      version that produced the published results. requirements-<profile>.txt
+#      names packages without versions, so it is used only when no record
+#      exists.
+#   2. If the stamp matches that file, do nothing.
+#   3. Create the environment if the directory is absent.
+#   4. Install the file.
+#   5. Write the stamp.
 # -----------------------------------------------------------------------------
 build_profile() {
   local profile="$1"
   local venv=".venv-${profile}"
   local requirements="requirements-${profile}.txt"
+  local lock="environment.lock/${profile}/packages.txt"
   local stamp="${venv}/.requirements.md5"
 
+  [[ -f "$lock" ]] && requirements="$lock"
   [[ -f "$requirements" ]] || die "${requirements} not found."
 
   local wanted
@@ -122,8 +129,11 @@ build_profile() {
   rm -f "$stamp"
 
   printf '  %-11s installing %s\n' "${profile}:" "$requirements"
-  "${venv}/bin/python" -m pip install -q -U pip \
-    || die "pip could not be upgraded in the ${profile} environment. Check the network."
+  # The record pins pip, so pip is upgraded only when there is no record.
+  if [[ "$requirements" != "$lock" ]]; then
+    "${venv}/bin/python" -m pip install -q -U pip \
+      || die "pip could not be upgraded in the ${profile} environment. Check the network."
+  fi
   "${venv}/bin/python" -m pip install -q -r "$requirements" \
     || die "pip failed for the ${profile} profile. The error is above. Check that the package index is reachable."
 
