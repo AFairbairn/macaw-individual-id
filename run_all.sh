@@ -329,8 +329,12 @@ if wanted 1; then
       --species "$sp" --device "$DEVICE" --clear \
       || die "Extraction failed for ${sp}. See the output above."
   done
+  # Stage 1 has now loaded every embedding, so every model had its weights. A
+  # recorded weight file that is still absent belongs to no model in the
+  # panel. A weight file that is present and differs from the record stops the
+  # run.
   say "Environment record, with the downloaded weights"
-  check_environment extraction "$PY_EXTRACTION"
+  check_environment extraction "$PY_EXTRACTION" --missing-weights-ok
   end_stage
 fi
 

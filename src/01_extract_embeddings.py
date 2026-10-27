@@ -3,74 +3,56 @@
 01_extract_embeddings.py
 
 PURPOSE
-    Compute the embedding of every call, for all 15 pre-trained models.
+    Compute the embedding of every call, for all 15 pre-trained models, and
+    stop at the first model that does not produce a usable embedding for every
+    call.
 
 USAGE
     python src/01_extract_embeddings.py --species aa --device cuda
-    python src/01_extract_embeddings.py --species ag --device cpu
+    python src/01_extract_embeddings.py --species ag --device cuda --clear
 
     To recompute one model, or a few, without touching the rest:
     python src/01_extract_embeddings.py --species ag --models beats,audiomae
 
-    Delete the output directory of a model before you recompute it. bacpipe
-    tries to continue a partly filled directory, and that path is unreliable.
-
 INPUT
-    audio_padded/    The padded audio that 00a_pad_audio.py writes.
+    audio_padded/    The padded audio that stage 0 writes.
 
 OUTPUT
     bacpipe_results/<species>/embeddings/<stamp>___<model>-<species>/.../
         One .npy file for each call and each model.
+    logs/extraction/<species>_<model>.log
+        Everything the model and its libraries print.
 
-RESUMING
-    A model that already wrote one .npy file for every call is skipped. To
-    recompute one model, delete its output directory and run the script again.
+WHAT THE TERMINAL SHOWS
+    One line for each model: the model name, then OK with the number of calls
+    and the time taken, or FAILED with the reason and the log file to read.
+
+WHEN A MODEL FAILS
+    A model fails when bacpipe skips a call, when bacpipe raises an error, when
+    a call has no file, or when a file does not load or holds a value that is
+    not finite. The script then stops. Every model before it is kept. To
+    recompute the failed model, run the script again with --models <name>.
 
 THE MODELS
     13 models come from bacpipe. 2 speech models come from their own libraries.
     The speech models are included because human speaker recognition is the
     closest analogue to individual identification in animals.
 
-HARDWARE
-    A small GPU is sufficient. On the LRZ AI Systems cluster, select the P100.
-    Do not queue for the A100. The extra memory gives no benefit here.
-
-    Three groups of models always run on CPU. This is expected behaviour.
-      - perch_bird, perch_v2, and surfperch use JAX.
-      - birdnet uses TensorFlow.
-      - avesecho_passt is pinned to CPU. See the caution below.
-
-CAUTION
-    bacpipe reads its device from settings.yaml inside the installed package. It
-    does not detect CUDA. The shipped value is 'cpu'. If you do not change that
-    value, the torch models run on CPU on a GPU node. The run is then much
-    slower and gives no error message. This script rewrites the value
-    before each model, so a reinstall of bacpipe cannot strand the run on CPU.
-
-CAUTION
-    avesecho_passt moves the model to the device but not the input audio. On
-    CUDA, every file fails and the model writes zero embeddings. The model is
-    listed in CPU_ONLY_MODELS, so it always runs on CPU.
-
-WARNING
-    Do not run `pip install -U jax[cuda12]` to make the JAX models use the GPU.
-    The -U flag upgrades numpy to version 2, which breaks the pinned torch and
-    bacpipe environment. To repair a broken environment, delete it and build it
-    again:
-        rm -rf .venv-extraction && ./setup.sh extraction
-
-NOTE
-    bacpipe prints many tracebacks after it writes the embeddings. Those
-    messages come from a dashboard step that this pipeline does not use. Do not
-    use the absence of tracebacks to confirm success. Run
-    src/01b_verify_embeddings.py instead, which counts the output files.
+THE DEVICE
+    The torch models run on the device given by --device. The TensorFlow
+    models (birdnet, perch_bird, surfperch) run on CPU, because torch installs
+    a cuDNN that this TensorFlow cannot use. avesecho_passt runs on CPU, because
+    on CUDA it fails on every call (cpu_only_models in config.yaml).
 """
 import argparse
+import contextlib
 import hashlib
+import logging
 import os
 import shutil
 import sys
 import tarfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -106,9 +88,9 @@ SPEECH_SAMPLE_RATE = 16000
 def audio_dir_for(species):
     """Return the audio directory of one species.
 
-    The directory is the padded copy that 00a_pad_audio.py writes, not the
-    published audio. Two models fail on the shortest clips, so every model
-    reads the same padded input. See the docstring of 00a_pad_audio.py.
+    The directory is the padded copy that stage 0 writes, not the published
+    audio. Two models fail on the shortest clips, so every model reads the same
+    padded input.
 
     THE DIRECTORY NAME IS THE OUTPUT PATH
         bacpipe writes to <main_results_dir>/<audio_dir.stem>/embeddings/. It
@@ -117,42 +99,29 @@ def audio_dir_for(species):
 
         So this function returns the species directory, whose name is the
         species code, and bacpipe writes to bacpipe_results/<species>/. That
-        is the path 01b_verify_embeddings.py and 03_classify.py read.
+        is the path this script checks and stage 3 reads.
     """
     root = PADDED / "data" / species
     if root.exists() and any(root.rglob("*.wav")):
         return root
     raise SystemExit(
         f"No padded audio found for {species} under {PADDED}. "
-        "Run: python src/00a_pad_audio.py"
+        "Run stage 0 first: ./run_all.sh --stages 0-0"
     )
 
 
-# The settings this pipeline requires from bacpipe, written into settings.yaml
-# inside the installed package before every model.
-#
-# device
-#     bacpipe does not detect CUDA. The shipped value is 'cpu', so without this
-#     the torch models run on CPU on a GPU node and give no error message.
+# The settings this pipeline writes into the settings.yaml of the installed
+# bacpipe package. bacpipe reads that file once, at import, so main writes it
+# before the first import.
 #
 # run_pretrained_classifier
-#     BirdNET ships a species classifier. bacpipe runs it after it has saved the
-#     embedding, writes a species prediction file, and builds an annotation
-#     table from it. On a single-time-bin file that code raises
-#     "index 1 is out of bounds for axis 0 with size 1", which bacpipe reports
-#     as "Error generating embeddings for <file>, skipping file" even though the
-#     embedding was already written.
-#
-#     Every clip here is shorter than the 3 second BirdNET segment, so every
-#     clip is a single time bin and the whole species is exposed to it.
-#
-#     This pipeline uses the embeddings and never the species predictions, so
-#     the classifier is turned off. The embedding model is a separate Keras
-#     model from the classifier head, so the embeddings do not change.
+#     bacpipe ships with the species classifier on. On a call shorter than one
+#     model window, the classifier step fails and bacpipe skips the call. This
+#     pipeline uses the embeddings only, so the classifier is off. The
+#     embedding does not depend on the classifier.
 #
 # save_raven_tables
-#     Raven tables are built from the classifier output. With no classifier
-#     there is nothing to write.
+#     Raven tables are built from the classifier output, so they are off too.
 BACPIPE_SETTINGS = {
     "run_pretrained_classifier": "False",
     "save_raven_tables": "False",
@@ -172,6 +141,22 @@ def bacpipe_settings_path():
     if spec is None or spec.origin is None:
         return None
     return Path(spec.origin).parent / "settings.yaml"
+
+
+def hide_gpu_from_tensorflow():
+    """Run the TensorFlow models on CPU, and the torch models on the device.
+
+    torch installs cuDNN 9.1 into this environment and TensorFlow needs cuDNN
+    9.3 to use a GPU. Only one cuDNN loads, so a TensorFlow model on the GPU
+    fails on every clip. bacpipe moves the TensorFlow models to CPU on some
+    code paths only. This hides the GPU from TensorFlow on every path. It
+    changes nothing for torch.
+    """
+    try:
+        import tensorflow as tf
+    except ImportError:
+        return
+    tf.config.set_visible_devices([], "GPU")
 
 
 def set_bacpipe_device(device):
@@ -221,88 +206,170 @@ def clear_model_output(audio_dir, model):
         print(f"  removed the previous output: {directory.name}", flush=True)
 
 
+class SkippedCalls(logging.Handler):
+    """Count the calls that bacpipe skips, and keep the first error message.
+
+    bacpipe logs a warning and continues when a call fails. This handler turns
+    that warning into a number that the model check can test.
+    """
+
+    def __init__(self):
+        super().__init__(level=logging.WARNING)
+        self.count = 0
+        self.first = None
+
+    def emit(self, record):
+        message = record.getMessage()
+        if "skipping file" not in message:
+            return
+        self.count += 1
+        if self.first is None:
+            self.first = message.strip().splitlines()[-1]
+
+
+@contextlib.contextmanager
+def output_to(log_path):
+    """Send everything printed inside the block to log_path.
+
+    The file descriptors are redirected, not only sys.stdout, so the output of
+    TensorFlow, ONNX Runtime and other compiled libraries goes to the log too.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved_out, saved_err = os.dup(1), os.dup(2)
+    with open(log_path, "a") as handle:
+        os.dup2(handle.fileno(), 1)
+        os.dup2(handle.fileno(), 2)
+        try:
+            yield
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(saved_out, 1)
+            os.dup2(saved_err, 2)
+            os.close(saved_out)
+            os.close(saved_err)
+
+
+def log_path_for(species, model):
+    """Return the log file of one model."""
+    return ROOT / "logs" / "extraction" / f"{species}_{model}.log"
+
+
+def model_directory(species, model):
+    """Return the output directory of one model, or None when there is none."""
+    parent = ROOT / "bacpipe_results" / species / "embeddings"
+    if not parent.is_dir():
+        return None
+    for directory in sorted(parent.iterdir()):
+        if directory.is_dir() and "___" in directory.name:
+            if directory.name.split("___")[1].rsplit("-", 1)[0] == model:
+                return directory
+    return None
+
+
+def check_model(species, model, skipped, error, started):
+    """Print one line for one model. Return True when every call is usable."""
+    expected = expected_stems(species)
+    directory = model_directory(species, model)
+    found = found_stems(directory, model) if directory else set()
+    broken = broken_stems(directory, model) if directory else set()
+    missing = expected - found
+
+    problems = []
+    if error:
+        problems.append(error)
+    if skipped.count:
+        problems.append(f"{skipped.count} calls skipped. First error: {skipped.first}")
+    if missing:
+        problems.append(f"{len(missing)} of {len(expected)} calls have no file")
+    if broken:
+        problems.append(f"{len(broken)} files hold no usable values")
+
+    minutes, seconds = divmod(int(time.time() - started), 60)
+    if problems:
+        print(f"  {model:22} FAILED", flush=True)
+        for problem in problems:
+            print(f"  {'':22} {problem}", flush=True)
+        print(f"  {'':22} Log: {log_path_for(species, model)}", flush=True)
+        return False
+
+    print(f"  {model:22} OK     {len(found)} calls  {minutes}m {seconds:02d}s", flush=True)
+    return True
+
+
+def is_evaluation_error(error, model):
+    """Return True for the error of the bacpipe step after the embeddings.
+
+    bacpipe.play writes the embeddings, then runs an evaluation step that
+    reads species predictions. The classifier is off, so there are no
+    predictions and that step raises FileNotFoundError. The embeddings are
+    already on disk when it does, and check_model tests them.
+    """
+    text = str(error)
+    return (
+        isinstance(error, FileNotFoundError)
+        and "evaluations" in text
+        and model in text
+        and "predictions" in text
+    )
+
+
 def run_bacpipe_models(audio_dir, device, wanted=None, clear=False):
     """Compute the embeddings of the bacpipe models.
 
-    When wanted is set, only those models run. Everything else is left alone,
-    so a model that failed can be recomputed without touching the rest.
+    Return False at the first model that fails, and True when every model
+    passes. When wanted is set, only those models run.
     """
-    import bacpipe
+    species = audio_dir.name
+    logger = logging.getLogger("bacpipe")
 
     for model in [m for m in BACPIPE_MODELS if wanted is None or m in wanted]:
-        if clear:
-            clear_model_output(audio_dir, model)
         model_device = "cpu" if model in CPU_ONLY_MODELS else device
-        set_bacpipe_device(model_device)
-        print(f"=== bacpipe: {model} (device={model_device}) ===", flush=True)
+        print(f"  {model:22} running on {model_device}", flush=True)
+        started = time.time()
+        skipped = SkippedCalls()
+        error = None
 
-        bacpipe.config.audio_dir = str(audio_dir)
-        bacpipe.config.models = [model]
-        bacpipe.config.dim_reduction_model = "None"
+        with output_to(log_path_for(species, model)):
+            if clear:
+                clear_model_output(audio_dir, model)
+            set_bacpipe_device(model_device)
+            import bacpipe
 
-        # The device and the classifier are set here, on the live config, and
-        # not only in settings.yaml.
-        #
-        # bacpipe reads settings.yaml once, when it is imported. The import is
-        # above this loop, so a value written to that file afterwards is never
-        # read. On 2026-08-03 the file held device: 'cuda' for a whole run while
-        # every torch model ran on CPU, and the run took hours longer than it
-        # needed to on a node that had been queued for. The file write is kept,
-        # because it is what a later import in a new process reads.
-        bacpipe.config.device = model_device
-        bacpipe.config.run_pretrained_classifier = False
-        bacpipe.config.save_raven_tables = False
+            # The models read bacpipe.settings. bacpipe reads them once, at
+            # import, so main writes settings.yaml before that import. If the
+            # classifier is still on here, every call of a model that has one
+            # is skipped.
+            for key in BACPIPE_SETTINGS:
+                if getattr(bacpipe.settings, key, False):
+                    error = f"bacpipe.settings.{key} is True. Run this stage again."
 
-        # The models read bacpipe.settings, not bacpipe.config. Stop if the
-        # classifier is on there, because then every clip of every model with
-        # a classifier is skipped. See the comment above BACPIPE_SETTINGS.
-        for key in BACPIPE_SETTINGS:
-            if getattr(bacpipe.settings, key, False):
-                raise SystemExit(
-                    f"bacpipe.settings.{key} is True. bacpipe read its settings "
-                    "before this script wrote them. Run this stage again."
-                )
-
-        # Say which device is in force. A run that silently drops to CPU is the
-        # fault this stage is least able to notice and most expensive to repeat.
-        effective = getattr(bacpipe.config, "device", "unknown")
-        if str(effective) != str(model_device):
-            print(
-                f"  WARNING: asked for {model_device} and bacpipe holds "
-                f"{effective}. The model will not use the device you asked for.",
-                flush=True,
-            )
-
-        # Turn off the dashboard step. This pipeline reads only the .npy files.
-        # An older bacpipe can lack these settings, so each one is set
-        # separately and a failure is ignored.
-        for attribute, value in (("dashboard", False), ("evaluation_task", None)):
-            try:
+            bacpipe.config.audio_dir = str(audio_dir)
+            bacpipe.config.models = [model]
+            bacpipe.config.dim_reduction_model = "None"
+            bacpipe.config.device = model_device
+            bacpipe.config.run_pretrained_classifier = False
+            bacpipe.config.save_raven_tables = False
+            for attribute, value in (("dashboard", False), ("evaluation_task", None)):
                 setattr(bacpipe.config, attribute, value)
-            except AttributeError:
-                pass
 
-        try:
-            bacpipe.play()
-        except Exception as error:
-            # bacpipe runs an evaluation step after it writes the embeddings.
-            # That step fails when dim_reduction_model is "None", and the
-            # embeddings are already on disk when it does. So one model is not
-            # allowed to end the run.
-            #
-            # The message and the traceback are both printed. One exception
-            # type covers a disk that filled up, a checkpoint that would not
-            # load and a harmless evaluation step. The type alone does not say
-            # which one happened.
-            import traceback
+            if error is None:
+                logger.addHandler(skipped)
+                try:
+                    bacpipe.play()
+                except Exception as raised:
+                    if not is_evaluation_error(raised, model):
+                        error = f"bacpipe raised {type(raised).__name__}: {raised}"
+                    import traceback
+                    traceback.print_exc()
+                finally:
+                    logger.removeHandler(skipped)
 
-            print(f"  {model}: bacpipe raised {type(error).__name__}: {error}", flush=True)
-            traceback.print_exc()
-            print(
-                f"  {model}: continuing. 01b_verify_embeddings.py counts the "
-                "files and fails the run if this model wrote nothing.",
-                flush=True,
-            )
+        if not check_model(species, model, skipped, error, started):
+            return False
+    return True
 
 
 def load_audio_16k(path, device):
@@ -366,46 +433,50 @@ def build_speech_encoder(model, device):
 def run_speech_models(audio_dir, device, wanted=None, clear=False):
     """Compute the embeddings of the 2 speech models.
 
-    The output path matches the bacpipe layout, so 03_classify.py reads all 15
-    models with the same code.
+    The output path matches the bacpipe layout, so stage 3 reads all 15 models
+    with the same code. Return False at the first model that fails.
     """
+    species = audio_dir.name
     files = sorted(audio_dir.rglob("*.wav"))
 
     for model in [m for m in SPEECH_MODELS if wanted is None or m in wanted]:
-        if clear:
-            clear_model_output(audio_dir, model)
-        print(f"=== speech: {model} ({len(files)} files, device={device}) ===", flush=True)
-
+        print(f"  {model:22} running on {device}", flush=True)
+        started = time.time()
+        skipped = SkippedCalls()
+        error = None
         out_dir = (
-            ROOT / "bacpipe_results" / audio_dir.name / "embeddings"
-            / f"speech___{model}-{audio_dir.name}"
+            ROOT / "bacpipe_results" / species / "embeddings"
+            / f"speech___{model}-{species}"
         )
 
-        if out_dir.is_dir() and len(list(out_dir.rglob("*.npy"))) >= len(files):
-            print(f"  {model}: already complete, skipped", flush=True)
-            continue
-
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        try:
-            encode = build_speech_encoder(model, device)
-        except Exception as error:
-            print(f"  {model}: the model did not load, skipped. "
-                  f"{type(error).__name__}: {error}", flush=True)
-            continue
-
-        for index, path in enumerate(files, start=1):
+        with output_to(log_path_for(species, model)):
+            if clear:
+                clear_model_output(audio_dir, model)
+            out_dir.mkdir(parents=True, exist_ok=True)
             try:
-                vector = np.asarray(encode(load_audio_16k(path, device))).reshape(-1)
-                destination = out_dir / path.relative_to(audio_dir).parent / f"{path.stem}_{model}.npy"
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                np.save(destination, vector)
-            except Exception as error:
-                print(f"  {model} failed on {path.name}: {type(error).__name__}", flush=True)
+                encode = build_speech_encoder(model, device)
+            except Exception as raised:
+                error = f"the model did not load. {type(raised).__name__}: {raised}"
+                encode = None
 
-            if index % 100 == 0:
-                print(f"  {index}/{len(files)}", flush=True)
+            for path in files if encode else []:
+                try:
+                    vector = np.asarray(encode(load_audio_16k(path, device))).reshape(-1)
+                    destination = (
+                        out_dir / path.relative_to(audio_dir).parent
+                        / f"{path.stem}_{model}.npy"
+                    )
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    np.save(destination, vector)
+                except Exception as raised:
+                    print(f"{path.name}: {type(raised).__name__}: {raised}", flush=True)
+                    skipped.count += 1
+                    if skipped.first is None:
+                        skipped.first = f"{type(raised).__name__}: {raised}"
 
+        if not check_model(species, model, skipped, error, started):
+            return False
+    return True
 
 # =============================================================================
 # The checkpoint check, before extraction
@@ -653,6 +724,26 @@ def found_stems(directory, model):
     return {path.name[: -len(suffix)] for path in directory.rglob(f"*{suffix}")}
 
 
+def broken_stems(directory, model):
+    """Return the clip stems whose embedding file holds no usable values.
+
+    Each file is loaded. A file is broken when it does not load, holds no
+    values, or holds a value that is not finite. A write to a full disk leaves
+    a file with a header and no data, and bacpipe reports nothing.
+    """
+    suffix = f"_{model}.npy"
+    broken = set()
+    for path in directory.rglob(f"*{suffix}"):
+        try:
+            values = np.load(path)
+            usable = values.size > 0 and bool(np.isfinite(values).all())
+        except Exception:
+            usable = False
+        if not usable:
+            broken.add(path.name[: -len(suffix)])
+    return broken
+
+
 def check_species_counts(species):
     """Report every model of one species. Return True when all are complete."""
     root = ROOT / f"bacpipe_results/{species}/embeddings"
@@ -675,6 +766,7 @@ def check_species_counts(species):
         model = directory.name.split("___")[1].rsplit("-", 1)[0]
         found = found_stems(directory, model)
         missing = expected - found
+        broken = broken_stems(directory, model)
 
         if not found:
             # This is the avesecho_passt on CUDA case.
@@ -687,8 +779,13 @@ def check_species_counts(species):
             if len(missing) > 3:
                 print(f"  {'':22}   and {len(missing) - 3} more")
             all_complete = False
+        elif broken:
+            print(f"  {model:22} BROKEN. {len(broken)}/{len(expected)} files hold no usable values.")
+            for stem in sorted(broken)[:3]:
+                print(f"  {'':22}   broken: {stem}")
+            all_complete = False
         else:
-            print(f"  {model:22} complete. {len(found)} clips.")
+            print(f"  {model:22} complete. {len(found)} clips, every file loads.")
 
     if len(directories) < EXPECTED_MODEL_COUNT:
         print(f"  Only {len(directories)} of {EXPECTED_MODEL_COUNT} models are present.")
@@ -700,7 +797,7 @@ def check_species_counts(species):
 def verify_counts(species_list):
     """Count the output of every model. Return True when every one is complete."""
     print("\nCounting the extracted embeddings.")
-    print("A traceback above does not mean the extraction failed. This counts files.")
+    print("A traceback above does not mean the extraction failed. This loads every file.")
     results = [check_species_counts(species) for species in species_list]
 
     print()
@@ -758,6 +855,11 @@ def main():
         except ImportError:
             device = "cpu"
 
+    # Hide the GPU from TensorFlow before anything uses TensorFlow. The
+    # checkpoint check below can be the first use.
+    with output_to(log_path_for(args.species, "setup")):
+        hide_gpu_from_tensorflow()
+
     # Write the settings before anything imports bacpipe. The checkpoint check
     # below is the first import.
     set_bacpipe_device(device)
@@ -791,8 +893,10 @@ def main():
     # --clear decides.
     clear = args.clear or wanted is not None
 
-    run_bacpipe_models(audio_dir, device, wanted, clear)
-    run_speech_models(audio_dir, device, wanted, clear)
+    if not run_bacpipe_models(audio_dir, device, wanted, clear):
+        return 1
+    if not run_speech_models(audio_dir, device, wanted, clear):
+        return 1
 
     # The embeddings carry the environment that produced them. Stage 3 and later
     # read this and stop if the feature sets disagree, which is the fault that
