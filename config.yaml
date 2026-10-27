@@ -1,4 +1,4 @@
-﻿# =============================================================================
+# =============================================================================
 # config.yaml
 #
 # PURPOSE
@@ -293,6 +293,48 @@ metric_learning:
   holdout_repeats: 12
   knn_k: 5
   few_shot_shots: [1, 5]
+  oscr_thresholds: 200           # Steps in the open-set threshold sweep.
+
+# -----------------------------------------------------------------------------
+# The open-set classification rate
+#
+# OSCR is the area under the curve of the correct classification rate against
+# the false positive rate, swept over the acceptance threshold. It scores
+# rejection and identification together, so a model earns a high value only when
+# it names the enrolled birds AND refuses the birds it has never seen. AUROC on
+# its own rewards the refusal alone.
+#
+# Huang et al. (2024) report OSCR, so this makes eval B readable against theirs.
+#
+# CAUTION
+#   Their novelty score is the highest softmax probability of a classifier.
+#   Ours is the highest cosine similarity to a known bird template, the same
+#   score that produces open_set_auroc. The metric is the same. The score behind
+#   it is not. State that difference in the methods.
+#
+# oscr_thresholds sets how many equally spaced acceptance thresholds the sweep
+# uses across the observed score range. The area is taken by the trapezium rule.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# The controls
+#
+# label_shuffle
+#   Permutes the bird labels and runs the probe again. The link between a call
+#   and its bird is broken and nothing else changes, so the expected result is
+#   the chance level. A value above chance means the scoring code, not the
+#   audio, produces the signal. Read `shuffle_balanced_byrec` against
+#   `chance_inverse_n_birds`.
+#
+# call_type_classification
+#   Classifies the call type instead of the bird, with the same models and the
+#   same recording-grouped split. It is a different task, reported as context
+#   for how much acoustic structure a representation holds. ag has eight call
+#   types. aa has one, so the columns hold no value for aa.
+# -----------------------------------------------------------------------------
+controls:
+  label_shuffle: true
+  call_type_classification: true
 
 # -----------------------------------------------------------------------------
 # Clustering

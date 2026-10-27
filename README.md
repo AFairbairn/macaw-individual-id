@@ -1,4 +1,4 @@
-﻿# Individual identification from parrot calls
+# Individual identification from parrot calls
 
 This repository produces every result table in the paper on acoustic individual identification
 in two macaw species. It covers 15 pre-trained embedding models, an MFCC baseline, and a
@@ -297,17 +297,40 @@ would come from the acoustic unit rather than from the biology.
 
 ### 6.4 The metrics
 
-The pipeline reports six metrics for every model.
+The pipeline reports these metrics for every model.
 
-1. **Macro F1.** The primary metric. `ag` is not balanced, and macro F1 gives every bird the
-   same weight whatever its number of calls. Column `macro_f1_byrec`.
-2. **Linear probe accuracy.** A logistic regression classifier on the frozen embeddings.
-3. **Cosine nearest-centroid accuracy.** One mean template for each bird. This metric matches
+1. **Balanced accuracy.** The closed-set number for the main text. It is the mean of the
+   per-bird recall values, so a bird with 42 calls counts the same as a bird with 108.
+   Column `balanced_accuracy_byrec`, with `balanced_accuracy_random` for the leaky split and
+   `balanced_accuracy_leakage_delta` for the difference.
+2. **Plain accuracy.** Column `accuracy_byrec`. Most published studies report plain accuracy,
+   so it stays in the table beside the balanced value.
+3. **Macro F1.** Column `macro_f1_byrec`. Gallego et al. (2026) use macro F1 as their primary
+   metric, so this is the quantity to compare against that study.
+4. **Cosine nearest-centroid accuracy.** One mean template for each bird. This metric matches
    the enrolment case.
-4. **Verification EER and AUROC.** Positive pairs are the same bird in different recordings.
-   This metric generalises to the open-set case.
-5. **Clustering.** KMeans, given the true number of birds. See Section 6.6.
-6. **Encounter accuracy.** See Section 6.5.
+5. **Verification EER and AUROC.** Positive pairs are the same bird in different recordings.
+   This metric generalises to the open-set case. The pairs are scored inside each test fold,
+   so `verification_auc_sd` and `verification_eer_sd` give the spread across folds.
+   `verification_auc_scaled` and `verification_eer_scaled` repeat the measurement with a
+   train-fitted scaler applied before the normalisation. See Section 6.7.
+6. **Clustering.** KMeans, given the true number of birds. See Section 6.6.
+7. **Encounter accuracy.** See Section 6.5.
+8. **Call-type classification.** `ag` only. The same probe with the call type as the label,
+   which says how much acoustic structure a representation holds when the target is the call
+   rather than the caller. Columns `call_type_balanced_byrec`, `call_type_accuracy_byrec`,
+   `call_type_macro_f1_byrec`, `n_call_types` and `call_type_chance`. `aa` has one call type,
+   so these columns hold no value for `aa`.
+9. **The label-shuffle control.** The bird labels are permuted and the probe runs again.
+   Nothing else changes, so the expected result is the chance level. Read
+   `shuffle_balanced_byrec` against `chance_inverse_n_birds`. A value above chance means the
+   scoring code, not the audio, produces the signal. Set by `controls.label_shuffle`.
+
+Stage 4 adds the open-set classification rate, `open_set_oscr`, which scores rejection and
+identification together. Huang et al. (2024) report it, so it makes evaluation B readable
+against theirs. Their novelty score is the highest softmax probability of a classifier and
+ours is the highest cosine similarity to a known bird template, so the metric matches and the
+score behind it does not.
 
 Caution: `ag` is not balanced. The number of calls for each bird runs from 42 to 108. Report
 the majority-class baseline (0.107 for `all`, 0.110 for `lab`) next to `1/n_birds`. If you
@@ -343,6 +366,20 @@ rewards a method that splits the data more finely. Report it next to AMI and ARI
 
 `cluster_ari_recording` is the control. A model that clusters by recording rather than by
 bird scores highly on it, and that is the failure this study is about.
+
+### 6.7 The two feature scalings of the verification metric
+
+The probe scales the features before it fits, with a scaler fitted on the train half of the
+fold. The cosine metrics do not: they use L2 normalisation alone, which is what the evaluation
+protocol specifies.
+
+Cosine similarity weights each dimension by its raw scale, so a small number of wide
+dimensions can decide the score. Whether that helps or hurts depends on the representation,
+so the pipeline measures it rather than assuming it. `verification_auc` and
+`verification_eer` use L2 normalisation alone. `verification_auc_scaled` and
+`verification_eer_scaled` apply the train-fitted scaler first and then normalise.
+
+Read the two as one comparison. Do not mix them inside one table.
 
 ---
 

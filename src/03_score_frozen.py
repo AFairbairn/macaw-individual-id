@@ -1,14 +1,14 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """
-03_classify.py
+03_score_frozen.py
 
 PURPOSE
     Score every embedding model at individual identification. This script
     produces the main results table of the paper.
 
 USAGE
-    python src/03_classify.py --species aa
-    python src/03_classify.py --species ag
+    python src/03_score_frozen.py --species aa
+    python src/03_score_frozen.py --species ag
 
 INPUT
     config.yaml                                     Every analysis choice.
@@ -42,8 +42,19 @@ THE METRICS
     probe        A logistic regression classifier on the embeddings.
     centroid     Cosine distance to one mean template for each bird.
     encounter    See the note below.
-    verification EER and AUROC over pairs of calls.
+    verification EER and AUROC over pairs of calls, inside the folds.
     clustering   KMeans, given the true number of birds.
+    call type    ag only. The same probe, with the call type as the label.
+    shuffle      The same probe, with the bird labels permuted. The control.
+
+BALANCED ACCURACY
+    ag holds 42 to 108 calls for each bird, so plain accuracy rewards a model
+    that favours the common birds. Balanced accuracy is the mean of the per-bird
+    recall values, so every bird counts the same whatever its call count. It is
+    the closed-set number for the main text. Plain accuracy stays in the table
+    for comparison with studies that report it.
+
+    aa holds 60 calls for every bird, so the two values agree there.
 
 NOTE ON THE ENCOUNTER METRIC
     The encounter metric pools the calls of one bird within one recording into
@@ -70,6 +81,7 @@ CAUTION ON THE CLUSTERING METRICS
 import argparse
 import collections
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -81,6 +93,7 @@ from sklearn.metrics import (
     accuracy_score,
     adjusted_mutual_info_score,
     adjusted_rand_score,
+    balanced_accuracy_score,
     f1_score,
     normalized_mutual_info_score,
     roc_auc_score,
@@ -96,6 +109,11 @@ CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
 
 SEED = CONFIG["seed"]
 N_FOLDS = CONFIG["split"]["n_folds"]
+
+# The two controls. Both are set in config.yaml, section 'controls'.
+CONTROLS = CONFIG.get("controls", {})
+RUN_LABEL_SHUFFLE = CONTROLS.get("label_shuffle", True)
+RUN_CALL_TYPE_TASK = CONTROLS.get("call_type_classification", True)
 
 # The dataset can live outside the repository. run_all.sh sets PARROT_DATA.
 DATA = Path(os.environ.get("PARROT_DATA", ROOT / "data"))
@@ -197,12 +215,22 @@ def load_embeddings(model_dir, model, master, single_stems):
                         record["recording_id"],
                         kind,
                         record["environment_class"],
+                        str(record.get("call_type", "")),
                         window.astype(np.float32),
                     )
                 )
 
     return pd.DataFrame(
-        rows, columns=["clip_id", "bird", "session", "kind", "environment_class", "embedding"]
+        rows,
+        columns=[
+            "clip_id",
+            "bird",
+            "session",
+            "kind",
+            "environment_class",
+            "call_type",
+            "embedding",
+        ],
     )
 
 
@@ -235,7 +263,8 @@ def run_probe(features, labels, groups, mode, clips=None):
     encoder = LabelEncoder()
     codes = encoder.fit_transform(labels)
 
-    accuracies, f1_scores, truths, predictions, clip_ids = [], [], [], [], []
+    accuracies, balanced, f1_scores = [], [], []
+    truths, predictions, clip_ids = [], [], []
 
     for train, test in make_splits(features, codes, groups, mode):
         # Skip a fold that cannot enrol every bird. tests/test_splits.py asserts
@@ -253,6 +282,7 @@ def run_probe(features, labels, groups, mode, clips=None):
         predicted = model.predict(scaler.transform(features[test]))
 
         accuracies.append(accuracy_score(codes[test], predicted))
+        balanced.append(balanced_accuracy_score(codes[test], predicted))
         f1_scores.append(f1_score(codes[test], predicted, average="macro"))
         truths += list(encoder.classes_[codes[test]])
         predictions += list(encoder.classes_[predicted])
@@ -262,6 +292,8 @@ def run_probe(features, labels, groups, mode, clips=None):
     return {
         "accuracy": float(np.mean(accuracies)) if accuracies else float("nan"),
         "sd": float(np.std(accuracies)) if accuracies else float("nan"),
+        "balanced": float(np.mean(balanced)) if balanced else float("nan"),
+        "balanced_sd": float(np.std(balanced)) if balanced else float("nan"),
         "f1": float(np.mean(f1_scores)) if f1_scores else float("nan"),
         "y_true": truths,
         "y_pred": predictions,
@@ -280,7 +312,8 @@ def run_centroid(features, labels, groups, mode, clips=None):
     encoder = LabelEncoder()
     codes = encoder.fit_transform(labels)
 
-    accuracies, f1_scores, truths, predictions, clip_ids = [], [], [], [], []
+    accuracies, balanced, f1_scores = [], [], []
+    truths, predictions, clip_ids = [], [], []
 
     for train, test in make_splits(features, codes, groups, mode):
         if len(np.unique(codes[train])) < len(encoder.classes_):
@@ -296,6 +329,7 @@ def run_centroid(features, labels, groups, mode, clips=None):
         predicted = (test_vectors @ templates.T).argmax(axis=1)
 
         accuracies.append(accuracy_score(codes[test], predicted))
+        balanced.append(balanced_accuracy_score(codes[test], predicted))
         f1_scores.append(f1_score(codes[test], predicted, average="macro"))
         truths += list(encoder.classes_[codes[test]])
         predictions += list(encoder.classes_[predicted])
@@ -305,6 +339,8 @@ def run_centroid(features, labels, groups, mode, clips=None):
     return {
         "accuracy": float(np.mean(accuracies)) if accuracies else float("nan"),
         "sd": float(np.std(accuracies)) if accuracies else float("nan"),
+        "balanced": float(np.mean(balanced)) if balanced else float("nan"),
+        "balanced_sd": float(np.std(balanced)) if balanced else float("nan"),
         "f1": float(np.mean(f1_scores)) if f1_scores else float("nan"),
         "y_true": truths,
         "y_pred": predictions,
@@ -318,6 +354,8 @@ def fuse_windows_to_clips(y_true, y_pred, clips):
     Most models return one window for each clip. Two models return more. This
     function makes the accuracy comparable across all models, by reducing every
     model to one prediction per clip. The rule is a majority vote.
+
+    Returns the accuracy, the macro-F1 and the balanced accuracy, in that order.
     """
     votes, truth = collections.defaultdict(list), {}
     for clip, true_label, predicted in zip(clips, y_true, y_pred):
@@ -331,6 +369,7 @@ def fuse_windows_to_clips(y_true, y_pred, clips):
     return (
         float(accuracy_score(truths, predictions)),
         float(f1_score(truths, predictions, average="macro")),
+        float(balanced_accuracy_score(truths, predictions)),
     )
 
 
@@ -378,8 +417,8 @@ def run_encounter(features, labels, groups):
     return float(np.mean(accuracies)) if accuracies else float("nan")
 
 
-def run_verification(features, labels, groups):
-    """Return the ROC AUC and the equal error rate over pairs of calls.
+def score_pairs(vectors, labels, groups):
+    """Return the ROC AUC and the equal error rate over one set of calls.
 
     A positive pair holds two calls from the same bird in different recordings.
     Pairs from the same recording are excluded, because they would measure the
@@ -389,11 +428,7 @@ def run_verification(features, labels, groups):
 
     The equal error rate is the point where the false positive rate equals the
     false negative rate. Lower is better. Chance is 0.5.
-
-    This metric matters most, because it generalises to the open set. A
-    verification score does not need the bird to be enrolled in advance.
     """
-    vectors = normalize(features)
     similarity = vectors @ vectors.T
 
     upper = np.triu_indices(len(labels), k=1)
@@ -416,6 +451,65 @@ def run_verification(features, labels, groups):
     false_negative = 1 - true_positive
     eer = float(false_positive[np.nanargmin(np.abs(false_negative - false_positive))])
     return auc, eer
+
+
+def run_verification(features, labels, groups):
+    """Return the verification AUC and EER, averaged over the folds.
+
+    The pairs are scored inside each test fold of the recording-grouped split,
+    so the metric sits on the same footing as the probe, the centroid and the
+    encounter metric, and it carries a standard deviation across folds.
+
+    This metric matters most, because it generalises to the open set. A
+    verification score does not need the bird to be enrolled in advance.
+
+    TWO FEATURE SCALINGS
+        The reported value uses L2 normalisation alone, which is what the
+        evaluation protocol specifies for the cosine metrics.
+
+        The `_scaled` value first applies a scaler fitted on the train half of
+        the fold, which is what the probe does, and then normalises. Cosine
+        similarity weights each dimension by its raw scale, so a few wide
+        dimensions can decide the score. The pair of values measures how much
+        that choice is worth on this data, rather than leaving it assumed.
+
+        Read the two as one comparison. Do not mix them within a table.
+
+    Returns the mean and the standard deviation of the AUC and the EER under
+    each of the two scalings.
+    """
+    encoder = LabelEncoder()
+    codes = encoder.fit_transform(labels)
+    vectors = normalize(features)
+
+    plain, scaled = collections.defaultdict(list), collections.defaultdict(list)
+
+    for train, test in make_splits(features, codes, groups, "by_recording"):
+        auc, eer = score_pairs(vectors[test], labels[test], groups[test])
+        if auc == auc:
+            plain["auc"].append(auc)
+            plain["eer"].append(eer)
+
+        scaler = StandardScaler().fit(features[train])
+        auc, eer = score_pairs(
+            normalize(scaler.transform(features[test])), labels[test], groups[test]
+        )
+        if auc == auc:
+            scaled["auc"].append(auc)
+            scaled["eer"].append(eer)
+
+    def summarise(values, key):
+        return (
+            float(np.mean(values[key])) if values[key] else float("nan"),
+            float(np.std(values[key])) if values[key] else float("nan"),
+        )
+
+    auc, auc_sd = summarise(plain, "auc")
+    eer, eer_sd = summarise(plain, "eer")
+    auc_scaled, _ = summarise(scaled, "auc")
+    eer_scaled, _ = summarise(scaled, "eer")
+
+    return auc, eer, auc_sd, eer_sd, auc_scaled, eer_scaled
 
 
 def run_clustering(features, labels, groups):
@@ -463,6 +557,78 @@ def run_clustering(features, labels, groups):
     }
 
 
+def run_label_shuffle(features, labels, groups, clips):
+    """Return the probe accuracy when the bird labels are permuted.
+
+    The control. It answers one question: does the pipeline report a score above
+    chance when there is no identity left to find?
+
+    The permutation moves the bird labels between calls and keeps the recording
+    groups where they are, so the split, the fold count and the class sizes are
+    the same as in the real run. Only the link between a call and its bird is
+    broken. The expected result is the chance level, and a value above chance
+    means the scoring code, not the audio, is producing the signal.
+
+    Balanced accuracy is the value to read, because it has one chance level,
+    1/n_birds, whatever the class sizes.
+    """
+    generator = np.random.default_rng(SEED)
+    shuffled = generator.permutation(labels)
+
+    # A permuted run predicts birds that a fold's test clips do not hold, and
+    # scikit-learn warns about it. That is the expected behaviour of a control
+    # with no signal, and the warning would otherwise appear once for every
+    # model in the run log. Only this control is silenced. The real path keeps
+    # every warning it produces.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="y_pred contains classes not in y_true")
+        probe = run_probe(features, shuffled, groups, "by_recording", clips=clips)
+        if not probe["clip"]:
+            return {"shuffle_accuracy_byrec": float("nan"),
+                    "shuffle_balanced_byrec": float("nan")}
+        accuracy, _, balanced = fuse_windows_to_clips(
+            probe["y_true"], probe["y_pred"], probe["clip"]
+        )
+
+    return {
+        "shuffle_accuracy_byrec": accuracy,
+        "shuffle_balanced_byrec": balanced,
+    }
+
+
+def run_call_type_task(features, call_types, groups, clips):
+    """Classify the call type instead of the bird.
+
+    This is a different task from individual identification, and it is reported
+    as context: it says how much of the acoustic structure the representation
+    holds when the target is the call rather than the caller. ag has eight call
+    types. aa has one, so the function returns nothing for aa.
+
+    The split groups on the recording, the same as every other metric here.
+
+    Read the result against `call_type_chance`, which is 1/n_call_types. The
+    call types are not balanced, so balanced accuracy is the value to report.
+    """
+    distinct = np.unique(call_types)
+    if len(distinct) < 2:
+        return {}
+
+    probe = run_probe(features, call_types, groups, "by_recording", clips=clips)
+    if not probe["clip"]:
+        return {}
+
+    accuracy, macro_f1, balanced = fuse_windows_to_clips(
+        probe["y_true"], probe["y_pred"], probe["clip"]
+    )
+    return {
+        "n_call_types": int(len(distinct)),
+        "call_type_chance": 1.0 / len(distinct),
+        "call_type_accuracy_byrec": accuracy,
+        "call_type_balanced_byrec": balanced,
+        "call_type_macro_f1_byrec": macro_f1,
+    }
+
+
 # =============================================================================
 # One model
 # =============================================================================
@@ -495,18 +661,22 @@ def score_model(frame, species, subset, call_set, model):
     # (aves_especies, birdaves_especies) return more than one window for a few
     # clips. Fusing to the clip keeps every model on the same unit. The measured
     # difference is at most 0.004 accuracy.
-    probe_clip_accuracy, probe_clip_f1 = fuse_windows_to_clips(
+    probe_clip_accuracy, probe_clip_f1, probe_clip_balanced = fuse_windows_to_clips(
         probe_grouped["y_true"], probe_grouped["y_pred"], probe_grouped["clip"]
     )
-    probe_random_clip_accuracy, probe_random_clip_f1 = fuse_windows_to_clips(
+    (
+        probe_random_clip_accuracy,
+        probe_random_clip_f1,
+        probe_random_clip_balanced,
+    ) = fuse_windows_to_clips(
         probe_random["y_true"], probe_random["y_pred"], probe_random["clip"]
     )
-    centroid_clip_accuracy, _ = fuse_windows_to_clips(
+    centroid_clip_accuracy, _, centroid_clip_balanced = fuse_windows_to_clips(
         centroid_grouped["y_true"], centroid_grouped["y_pred"], centroid_grouped["clip"]
     )
 
     encounter_accuracy = run_encounter(features, labels, groups)
-    auc, eer = run_verification(features, labels, groups)
+    auc, eer, auc_sd, eer_sd, auc_scaled, eer_scaled = run_verification(features, labels, groups)
 
     # Two baselines. For an unbalanced set, the majority-class rate is the
     # honest one. See the caution in the module docstring.
@@ -532,26 +702,35 @@ def score_model(frame, species, subset, call_set, model):
         "chance_inverse_n_birds": chance_inverse,
         "chance_majority_class": chance_majority,
 
-        # --- MAIN TEXT metric 1 of 4: accuracy, both splits -------------------
-        # The unit is the clip, that is one call.
+        # --- MAIN TEXT metric 1 of 4: balanced accuracy, both splits ----------
+        # The closed-set number for the main text. It is the mean of the
+        # per-bird recall values, so a bird with 42 calls counts the same as a
+        # bird with 108. The unit is the clip, that is one call.
+        "balanced_accuracy_byrec": probe_clip_balanced,
+        "balanced_accuracy_random": probe_random_clip_balanced,
+        "balanced_accuracy_leakage_delta": probe_random_clip_balanced - probe_clip_balanced,
+        "balanced_accuracy_byrec_sd": probe_grouped["balanced_sd"],
+
+        # Plain accuracy, kept beside it. Most of the studies this work is read
+        # against report plain accuracy, so it stays in the table.
         "accuracy_byrec": probe_clip_accuracy,
         "accuracy_random": probe_random_clip_accuracy,
         "accuracy_leakage_delta": probe_random_clip_accuracy - probe_clip_accuracy,
         "accuracy_byrec_sd": probe_grouped["sd"],
 
         # --- MAIN TEXT metric 2 of 4: macro-F1, both splits -------------------
-        # Macro-F1 is the PRIMARY metric, because it is not distorted by the ag
-        # class imbalance. Gallego et al. (2026) use it as primary for the same
-        # reason.
+        # Gallego et al. (2026) use macro-F1 as their primary metric, so it is
+        # the quantity to compare against that study.
         "macro_f1_byrec": probe_clip_f1,
         "macro_f1_random": probe_random_clip_f1,
         "macro_f1_leakage_delta": probe_random_clip_f1 - probe_clip_f1,
 
         # --- MAIN TEXT metric 3 of 4: verification AUC ------------------------
-        # Comparable to Stowell et al. (2019) and Huang et al. (2025), who both
-        # report AU-ROC. EER is kept below for the supplement. The two rank
-        # the models almost identically (Spearman 0.98).
+        # Comparable to Stowell et al. (2019) and Huang et al. (2024), who both
+        # report AU-ROC. EER is kept below for the supplement. The pairs are
+        # scored inside the folds, so both values carry a fold spread.
         "verification_auc": auc,
+        "verification_auc_sd": auc_sd,
 
         # --- MAIN TEXT metric 4 of 4: encounter accuracy ----------------------
         # The deployment unit. See the note in the module docstring.
@@ -559,13 +738,30 @@ def score_model(frame, species, subset, call_set, model):
 
         # --- SUPPLEMENT ------------------------------------------------------
         "verification_eer": eer,
+        "verification_eer_sd": eer_sd,
+        # The same two pair scores with a train-fitted scaler applied before the
+        # normalisation. See the note in run_verification. Report the pair, or
+        # neither.
+        "verification_auc_scaled": auc_scaled,
+        "verification_eer_scaled": eer_scaled,
         "centroid_accuracy_byrec": centroid_grouped["accuracy"],
+        "centroid_balanced_byrec": centroid_clip_balanced,
         "centroid_accuracy_random": centroid_random["accuracy"],
         "centroid_macro_f1_byrec": centroid_grouped["f1"],
         # Window-level accuracy, kept so the clip-level fusion can be checked.
         "accuracy_byrec_window_level": probe_grouped["accuracy"],
     }
     row.update(run_clustering(features, labels, groups))
+
+    # The call-type task. ag has eight call types, aa has one, so this adds
+    # columns for ag and nothing for aa.
+    if RUN_CALL_TYPE_TASK:
+        row.update(run_call_type_task(features, frame["call_type"].to_numpy(), groups, clips))
+
+    # The control. The bird labels are permuted, so the expected result is the
+    # chance level.
+    if RUN_LABEL_SHUFFLE:
+        row.update(run_label_shuffle(features, labels, groups, clips))
 
     predictions = [
         {
@@ -681,11 +877,13 @@ def main():
 
                 print(
                     f"  [{subset}/{call_set}] {model}: "
-                    f"F1 {row['macro_f1_byrec']:.3f} "
+                    f"balanced {row['balanced_accuracy_byrec']:.3f} "
+                    f"(random {row['balanced_accuracy_random']:.3f}, "
+                    f"delta {row['balanced_accuracy_leakage_delta']:+.3f}, "
+                    f"chance {row['chance_inverse_n_birds']:.3f}, "
+                    f"shuffled {row.get('shuffle_balanced_byrec', float('nan')):.3f}) "
                     f"acc {row['accuracy_byrec']:.3f} "
-                    f"(random {row['accuracy_random']:.3f}, "
-                    f"delta {row['accuracy_leakage_delta']:+.3f}, "
-                    f"majority {row['chance_majority_class']:.3f}) "
+                    f"F1 {row['macro_f1_byrec']:.3f} "
                     f"auc {row['verification_auc']:.3f} "
                     f"encounter {row['encounter_accuracy']:.3f}",
                     flush=True,

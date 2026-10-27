@@ -114,7 +114,7 @@ SUMMARY_PATTERNS = [
 def score_once(destination):
     """Run stage 3 once, writing below destination. Return the summary table."""
     command = [
-        sys.executable, str(ROOT / "src" / "03_metric_learning.py"),
+        sys.executable, str(ROOT / "src" / "04_metric_learning.py"),
         "--species", CHECK_SPECIES,
         "--subset", CHECK_SUBSET,
         "--models", CHECK_MODEL,

@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 """
 04_metric_learning.py
 
@@ -152,6 +152,7 @@ HOLDOUT_BIRDS = SETTINGS["holdout_birds"]
 HOLDOUT_REPEATS = SETTINGS["holdout_repeats"]
 KNN_K = SETTINGS["knn_k"]
 FEW_SHOT_SHOTS = SETTINGS["few_shot_shots"]
+N_OSCR_THRESHOLDS = SETTINGS["oscr_thresholds"]
 
 # The share of each known bird's calls that is held back to score the
 # known side of the known-against-novel comparison.
@@ -509,6 +510,65 @@ def open_set_auroc(known_reference_z, known_reference_y, known_test_z, novel_z):
     return float(roc_auc_score(labels, scores))
 
 
+def open_set_classification_rate(
+    known_reference_z, known_reference_y, known_test_z, known_test_y, novel_z
+):
+    """Score rejection and identification together, as one number.
+
+    The open-set classification rate is the area under the curve of the correct
+    classification rate against the false positive rate, swept over the
+    acceptance threshold. At each threshold:
+
+      correct classification rate  the fraction of known calls that are both
+                                   accepted and given the right bird.
+      false positive rate          the fraction of novel calls that are
+                                   accepted.
+
+    A model scores well only when it identifies the enrolled birds AND refuses
+    the ones it has never seen. AUROC alone rewards the refusal on its own, so
+    the two are reported together.
+
+    Huang et al. (2024) report this metric, so it makes the open-set result here
+    readable against theirs. Their novelty score is the highest softmax
+    probability. Ours is the highest cosine similarity to a known template, the
+    same score used for `open_set_auroc` above. State that difference in the
+    methods.
+
+    The threshold sweep uses N_OSCR_THRESHOLDS equally spaced values across the
+    observed score range, and the area is taken by the trapezium rule.
+    """
+    classes = np.unique(known_reference_y)
+    templates = normalize(
+        np.stack([known_reference_z[known_reference_y == c].mean(0) for c in classes])
+    )
+
+    if not len(known_test_z) or not len(novel_z):
+        return float("nan")
+
+    known_similarity = known_test_z @ templates.T
+    known_scores = known_similarity.max(1)
+    correct = classes[known_similarity.argmax(1)] == known_test_y
+    novel_scores = (novel_z @ templates.T).max(1)
+
+    low = float(min(known_scores.min(), novel_scores.min()))
+    high = float(max(known_scores.max(), novel_scores.max()))
+    if high <= low:
+        return float("nan")
+
+    thresholds = np.linspace(low, high, N_OSCR_THRESHOLDS)
+    rates = [
+        (
+            float((novel_scores >= t).mean()),
+            float((correct & (known_scores >= t)).mean()),
+        )
+        for t in thresholds
+    ]
+    rates.sort()
+    false_positive = np.array([r[0] for r in rates])
+    correct_rate = np.array([r[1] for r in rates])
+    return float(np.trapezoid(correct_rate, false_positive))
+
+
 # =============================================================================
 # One model
 # =============================================================================
@@ -689,12 +749,20 @@ def evaluate_model(model, frame, dump=False):
                 if len(z_known_test)
                 else float("nan")
             )
+            oscr = (
+                open_set_classification_rate(
+                    z_known_train, y_known_train, z_known_test, labels[known_test], z_novel
+                )
+                if len(z_known_test)
+                else float("nan")
+            )
 
             values = {
                 "eer": eer,
                 "ari": ari,
                 "ami": ami,
                 "open_set_auroc": auroc,
+                "open_set_oscr": oscr,
                 f"few_shot_{FEW_SHOT_SHOTS[0]}": few_shot_novel_accuracy(
                     z_known_train, z_novel, y_novel, FEW_SHOT_SHOTS[0], few_shot_generator
                 ),
@@ -727,6 +795,8 @@ def evaluate_model(model, frame, dump=False):
                 ari_sd=np.nanstd(collected["ari"]),
                 ami=np.nanmean(collected["ami"]),
                 open_set_auroc=np.nanmean(collected["open_set_auroc"]),
+                open_set_oscr=np.nanmean(collected["open_set_oscr"]),
+                open_set_oscr_sd=np.nanstd(collected["open_set_oscr"]),
                 **{
                     f"few_shot_{n}": np.nanmean(collected[f"few_shot_{n}"])
                     for n in FEW_SHOT_SHOTS

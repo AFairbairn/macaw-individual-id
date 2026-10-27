@@ -11,6 +11,11 @@
 results/
 logs/
 
+# The archives stage 6 writes. They are copies of results/ and of the log, so
+# tracking them would put the same numbers in the repository twice, as large
+# binaries. The full archive of run 20260804_114737 is 170 MB.
+run_outputs/
+
 # Generated features. Stage 1 and stage 2 recreate them.
 bacpipe_results/
 mfcc_results/
