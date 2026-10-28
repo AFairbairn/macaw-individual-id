@@ -45,7 +45,7 @@ def load_stage_one():
     return module
 
 
-def build_padded_tree(root, species):
+def build_audio_tree(root, species):
     """Write one empty file for every clip of one species, at its real path."""
     master = ROOT / f"data/{species}/metadata/{species}_master.csv"
     if not master.exists():
@@ -62,8 +62,8 @@ def build_padded_tree(root, species):
 def test_audio_dir_is_named_after_the_species(tmp_path, monkeypatch, species):
     """bacpipe names its output directory after the directory it is given."""
     stage_one = load_stage_one()
-    build_padded_tree(tmp_path, species)
-    monkeypatch.setattr(stage_one, "PADDED", tmp_path)
+    build_audio_tree(tmp_path, species)
+    monkeypatch.setattr(stage_one.common, "resolve_data", lambda: tmp_path / "data")
 
     audio_dir = stage_one.audio_dir_for(species)
 
@@ -78,8 +78,8 @@ def test_audio_dir_is_named_after_the_species(tmp_path, monkeypatch, species):
 def test_audio_dir_holds_every_clip(tmp_path, monkeypatch, species):
     """The directory handed to bacpipe holds every clip of the species."""
     stage_one = load_stage_one()
-    expected = build_padded_tree(tmp_path, species)
-    monkeypatch.setattr(stage_one, "PADDED", tmp_path)
+    expected = build_audio_tree(tmp_path, species)
+    monkeypatch.setattr(stage_one.common, "resolve_data", lambda: tmp_path / "data")
 
     audio_dir = stage_one.audio_dir_for(species)
     found = len(list(audio_dir.rglob("*.wav")))

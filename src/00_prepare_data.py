@@ -5,26 +5,21 @@
 STAGE 0 of 5
 
 PURPOSE
-    Get the data ready for every later stage. Two jobs.
-
-    1. Check the master metadata table of each species. The master table is the
-       single source of truth for the bird identity and the source recording of
-       every clip. Every later stage reads it.
-    2. Write a padded copy of every clip, because two models fail on the
-       shortest ones. Stage 1 reads that copy.
+    Check the master metadata table of each species, and check that every audio
+    file it names is present and holds audio. The master table is the single
+    source of truth for the bird identity and the source recording of every
+    clip. Every later stage reads it.
 
 USAGE
-    python src/00_prepare_data.py            Check the tables, then pad.
+    python src/00_prepare_data.py            Check the tables and the audio.
     python src/00_prepare_data.py --rebuild  Rebuild the tables. Authors only.
 
 INPUT
-    config.yaml                                     The padding block.
     data/<species>/metadata/<species>_master.csv    The clip list.
     The audio named in rel_audio_path, under the dataset root.
 
 OUTPUT
-    audio_padded/<rel_audio_path>
-        One file for each row of each master table, below the repository root.
+    None. The stage stops the run when a table or an audio file fails a check.
 
 TWO MODES, AND WHY
     Validate (the default)
@@ -70,32 +65,6 @@ THE RECORDING IDENTIFIER
 
     ag therefore holds 1,009 clips, not the 1,060 that were published before.
 
-WHY THE AUDIO IS PADDED
-    The calls are short. Every Ara ambiguus clip is between 0.192 and 1.093
-    seconds. Two models fail on clips at the low end of that range.
-
-    BirdNET raises "index 1 is out of bounds for axis 0 with size 1" and the
-    clip is skipped, so the model writes no embedding for it. The run continues
-    and the log gives no total, so the loss is only visible when the embedding
-    count is checked at the end of stage 1.
-
-    WavLMForXVector fails the same way. Its convolution and TDNN stack needs a
-    minimum number of frames.
-
-    Both species get the same treatment. The main result of the paper compares
-    the two species, so to pad one and not the other would put a preprocessing
-    difference inside that comparison. A clip that is already long enough is
-    copied without change, so the rule costs nothing where it is not needed.
-
-    The padding is silence at the end of the clip. It adds no acoustic content.
-    It moves the call to the start of a longer window, which is where a model
-    that pads internally would put it anyway. The minimum length is a
-    preprocessing choice of this pipeline and not a property of the recordings.
-
-RERUNNING
-    A file that is already present in audio_padded is left alone. To build the
-    whole tree again, delete the directory and run this stage again.
-
 PRIVACY
     The published table holds only fields that are safe to release: the housing
     aviary, the birth year, the sex, and an anonymised sibling group. The
@@ -108,26 +77,17 @@ PRIVACY
 """
 import argparse
 import hashlib
-import os
-import shutil
 import sys
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
-import soundfile as sf
+import soundfile
 
 import common
-
-# The header check reads every wav to confirm it holds audio. soundfile is a
-# hard requirement of the padding half of this stage, so it is imported above
-# and this name is kept only so the checks below read the same as before.
-soundfile = sf
 
 ROOT = common.ROOT
 CONFIG = common.CONFIG
 DATA = common.resolve_data()
-PADDED = ROOT / "audio_padded"
 
 # Every master table must hold these columns. A later stage reads each one.
 REQUIRED_COLUMNS = [
@@ -314,17 +274,16 @@ def validate(species):
             empty.append(relative)
             continue
 
-        if soundfile is not None:
-            try:
-                frames = soundfile.info(path).frames
-            except Exception as error:
-                # Carry the message. A permission error, an unsupported codec
-                # and a truncated file need different fixes.
-                corrupt.append(f"{relative}  ({type(error).__name__}: {error})")
-                continue
-            if frames == 0:
-                empty.append(relative)
-                continue
+        try:
+            frames = soundfile.info(path).frames
+        except Exception as error:
+            # Carry the message. A permission error, an unsupported codec
+            # and a truncated file need different fixes.
+            corrupt.append(f"{relative}  ({type(error).__name__}: {error})")
+            continue
+        if frames == 0:
+            empty.append(relative)
+            continue
 
         # The data package ships CHECKSUMS.csv. Where it is available, compare
         # against it. A checksum catches a file that was changed after the
@@ -409,117 +368,11 @@ def rebuild():
 
 
 # =============================================================================
-# Padding
-# =============================================================================
-
-def source_path(relative):
-    """Return the source file for one rel_audio_path value.
-
-    rel_audio_path starts with "data/", so it resolves either from the parent of
-    the data directory or from the data directory itself. Both roots are tried,
-    so this works whether the dataset path names the package or the data
-    directory inside it.
-    """
-    for candidate in (DATA.parent / relative, DATA / relative):
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def pad_one(source, target, minimum_samples):
-    """Write one padded file. Return the number of samples that were added.
-
-    The written file keeps the format and the subtype of the source, so a padded
-    file and a copied file share one bit depth. Clip length decides which branch
-    a clip takes, and mean clip length differs between the two species, so a bit
-    depth difference would sit inside the species comparison.
-
-    The file is written to a temporary name and then moved into place. A run that
-    stops in the middle therefore leaves no half-written file for the next run to
-    accept as complete.
-    """
-    info = sf.info(source)
-    audio, rate = sf.read(source, always_2d=True)
-    needed = minimum_samples(rate) - len(audio)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    # The temporary name keeps the extension. soundfile reads the format from it,
-    # and the format is passed as well, so neither depends on the other.
-    temporary = target.with_name(f"{target.stem}.part{target.suffix}")
-
-    if needed <= 0:
-        shutil.copyfile(source, temporary)
-        os.replace(temporary, target)
-        return 0
-
-    silence = np.zeros((needed, audio.shape[1]), dtype=audio.dtype)
-    sf.write(temporary, np.concatenate([audio, silence]), rate,
-             format=info.format, subtype=info.subtype)
-    os.replace(temporary, target)
-    return needed
-
-
-def pad_all():
-    """Pad every clip of every species. Return an exit code."""
-    # Stop. Two models fail on the shortest clips, so a run without padding
-    # loses embeddings and says nothing. A missing block is a broken config, not
-    # an instruction to skip the work.
-    block = CONFIG.get("padding")
-    if not block:
-        print("config.yaml has no padding block.")
-        print("Stage 1 reads audio_padded/, which this stage writes.")
-        print("Restore the padding block. tests/test_config.py checks for it.")
-        return 1
-
-    minimum_seconds = float(block["min_seconds"])
-    print(f"Minimum clip length: {minimum_seconds} s")
-    print(f"Writing to {PADDED}")
-
-    failed = False
-    for species in CONFIG["species"]:
-        table = common.read_master(species)
-        padded = copied = skipped = missing = 0
-
-        for relative in table["rel_audio_path"]:
-            target = PADDED / relative
-            if target.exists() and target.stat().st_size > 0:
-                skipped += 1
-                continue
-
-            source = source_path(relative)
-            if source is None:
-                missing += 1
-                if missing <= 5:
-                    print(f"  [{species}] not found: {relative}")
-                continue
-
-            added = pad_one(source, target,
-                            lambda rate: int(round(minimum_seconds * rate)))
-            if added:
-                padded += 1
-            else:
-                copied += 1
-
-        print(f"  [{species}] {len(table)} clips: "
-              f"{padded} padded, {copied} copied, {skipped} already present")
-        if missing:
-            print(f"  [{species}] FAILED: {missing} source file(s) not found under {DATA}")
-            failed = True
-
-    if failed:
-        print()
-        print(f"Check that the audio under {DATA} is complete.")
-        return 1
-
-    print("Every clip is present in audio_padded.")
-    return 0
-
-
-# =============================================================================
 # Entry point
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Check the metadata, then pad the audio.")
+    parser = argparse.ArgumentParser(description="Check the metadata and the audio.")
     parser.add_argument(
         "--rebuild",
         action="store_true",
@@ -549,10 +402,8 @@ def main():
         print(f"correctly. Check that the dataset at {DATA} is complete.")
         return 1
 
-    print("The master metadata is valid.")
-    print()
-    print("Padding the audio.")
-    return pad_all()
+    print("The master metadata is valid, and every audio file is present.")
+    return 0
 
 
 if __name__ == "__main__":

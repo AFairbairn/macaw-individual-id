@@ -15,7 +15,7 @@ USAGE
     python src/01_extract_embeddings.py --species ag --models beats,audiomae
 
 INPUT
-    audio_padded/    The padded audio that stage 0 writes.
+    The published audio of one species, under the dataset root.
 
 OUTPUT
     bacpipe_results/<species>/embeddings/<stamp>___<model>-<species>/.../
@@ -66,7 +66,6 @@ import common  # noqa: E402
 
 ROOT = common.ROOT
 CONFIG = common.CONFIG
-PADDED = ROOT / "audio_padded"
 
 # The 13 models that bacpipe provides.
 BACPIPE_MODELS = [
@@ -88,9 +87,10 @@ SPEECH_SAMPLE_RATE = 16000
 def audio_dir_for(species):
     """Return the audio directory of one species.
 
-    The directory is the padded copy that stage 0 writes, not the published
-    audio. Two models fail on the shortest clips, so every model reads the same
-    padded input.
+    The directory is the species directory of the published dataset. Each
+    bacpipe model fits every clip to its own input window, by repeating the
+    clip ('wrap' in the bacpipe settings). The speech models pad a short clip
+    with silence when it is loaded. See load_audio_16k.
 
     THE DIRECTORY NAME IS THE OUTPUT PATH
         bacpipe writes to <main_results_dir>/<audio_dir.stem>/embeddings/. It
@@ -101,13 +101,10 @@ def audio_dir_for(species):
         species code, and bacpipe writes to bacpipe_results/<species>/. That
         is the path this script checks and stage 3 reads.
     """
-    root = PADDED / "data" / species
-    if root.exists() and any(root.rglob("*.wav")):
+    root = common.resolve_data() / species
+    if root.is_dir() and any(root.rglob("*.wav")):
         return root
-    raise SystemExit(
-        f"No padded audio found for {species} under {PADDED}. "
-        "Run stage 0 first: ./run_all.sh --stages 0-0"
-    )
+    raise SystemExit(f"No audio found for {species} under {root}.")
 
 
 # The settings this pipeline writes into the settings.yaml of the installed

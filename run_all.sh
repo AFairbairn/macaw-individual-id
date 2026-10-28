@@ -37,7 +37,7 @@
 #   ./run_all.sh --data /scratch/parrot   Read the audio from there.
 #
 # THE STAGES
-#   0   Master metadata, and padding the short clips.        analysis
+#   0   Master metadata and audio check.                     analysis
 #   1   Embedding extraction, 15 models.                     extraction, GPU
 #   2   The MFCC baseline, 3 variants.                       analysis
 #   3   Classification, verification, clustering.            analysis
@@ -301,14 +301,13 @@ fi
 
 # =============================================================================
 if wanted 0; then
-  begin_stage "STAGE 0 of 6   Metadata, audio and padding      [CPU]"
+  begin_stage "STAGE 0 of 6   Metadata and audio check         [CPU]"
 # =============================================================================
   # The master table is the single source of truth for the bird identity and the
   # recording_id of every clip. Every later stage reads it. This checks it, then
-  # checks that every audio file is present and holds audio, then pads the clips
-  # below the minimum length, because two models fail on the shortest ones.
+  # checks that every audio file is present and holds audio.
   "$PY_ANALYSIS" src/00_prepare_data.py \
-    || die "The data could not be prepared. See the output above."
+    || die "The data did not pass the checks. See the output above."
   end_stage
 fi
 

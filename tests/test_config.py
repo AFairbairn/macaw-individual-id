@@ -7,9 +7,8 @@ PURPOSE
     file can remove a block that a script depends on, and a script that reads a
     missing block with .get() carries on and does nothing.
 
-    That happened. An edit to the checkpoints block removed the padding block
-    beside it. 00_prepare_data.py printed "config.yaml has no padding block.
-    Nothing to do", returned 0, and the run continued with no padded audio.
+    An edit to one block can remove the block beside it. A script that reads
+    the removed block with .get() then does nothing, and the run continues.
 
 USAGE
     pytest tests/
@@ -42,7 +41,6 @@ REQUIRED_BLOCKS = [
     "subsets",
     "call_set",
     "split",
-    "padding",
     "mfcc",
     "metric_learning",
     "cpu_only_models",
@@ -99,13 +97,6 @@ def test_every_key_the_code_reads_exists(path):
 def test_the_required_blocks_are_present(block):
     """A run cannot proceed without these blocks."""
     assert block in CONFIG, f"config.yaml has no {block} block."
-
-
-def test_padding_holds_a_positive_minimum():
-    """The padding minimum is a number above zero."""
-    minimum = CONFIG["padding"]["min_seconds"]
-    assert isinstance(minimum, (int, float))
-    assert minimum > 0
 
 
 @pytest.mark.parametrize("species", CONFIG["species"])

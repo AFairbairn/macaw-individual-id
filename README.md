@@ -203,7 +203,7 @@ The pipeline has seven stages, numbered 0 to 6. Stage 1 is the only stage that u
 
 | Stage | Script | Output | Hardware |
 |---|---|---|---|
-| 0 | `00_prepare_data.py` | `audio_padded/` | CPU |
+| 0 | `00_prepare_data.py` | none, it checks the data | CPU |
 | 1 | `01_extract_embeddings.py` | `bacpipe_results/<sp>/embeddings/` | GPU |
 | 2 | `02_extract_mfcc.py` | `mfcc_results/<sp>/embeddings/` | CPU |
 | 3 | `03_score_frozen.py` | `results/<sp>/rows.csv` | CPU |
@@ -246,7 +246,6 @@ macaw-individual-id/
 â”œâ”€â”€ tests/
 â”‚   â”œâ”€â”€ test_config.py            Asserts that no threshold is hard-coded in a script.
 â”‚   â”œâ”€â”€ test_output_paths.py      Asserts that every model writes where the stages read.
-â”‚   â”œâ”€â”€ test_padding.py           Asserts that padding changes the length and nothing else.
 â”‚   â””â”€â”€ test_splits.py            Asserts that the split does not leak.
 â”œâ”€â”€ data/<sp>/metadata/           The master tables. Tracked here.
 â””â”€â”€ results/                      All outputs. Regenerated, never edited by hand.
@@ -413,8 +412,7 @@ pytest tests/
 test set, for every species and every subset.
 
 `tests/test_output_paths.py` asserts that stage 1 writes to the directory that stage 1b and
-stage 3 read. `tests/test_padding.py` asserts that a padded clip keeps the sample rate,
-channel count and sample format of its source. `tests/test_config.py` asserts that no script
+stage 3 read. `tests/test_config.py` asserts that no script
 holds a threshold that belongs in `config.yaml`.
 
 Every run also checks itself. After the manifest, `run_all.sh` scores one model twice and
@@ -436,20 +434,20 @@ is then much slower and gives no error.
 
 `run_all.sh` sets this value automatically and keeps a backup of the original file.
 
-### 8.2 Two models fail on the shortest clips
+### 8.2 How each representation handles a short clip
 
-BirdNET raises `index 1 is out of bounds for axis 0 with size 1` on the shortest clips. It
-skips the clip and continues, so the model writes no embedding for it and the log gives no
-total. WavLMForXVector fails the same way, because its convolution and TDNN stack needs a
-minimum number of frames.
+The calls are short. Every Ara ambiguus clip is between 0.192 and 1.093 seconds.
 
-`src/00_prepare_data.py` adds trailing silence to any clip below `padding.min_seconds` in
-`config.yaml` and copies the rest unchanged, into `audio_padded/`. Stage 1 and stage 2 both
-read that copy, so every representation sees the same audio. The rule is applied to both
-species, because padding one and not the other would put a preprocessing difference inside
-the species comparison.
+- The 13 bacpipe models read the published audio. bacpipe fits each clip to the input window
+  of the model by repeating the clip (`padding: 'wrap'` in the bacpipe settings).
+- The 2 speech models read the published audio. `load_audio_16k` in
+  `src/01_extract_embeddings.py` pads a clip shorter than 1 s with trailing silence, because
+  WavLMForXVector needs a minimum number of frames.
+- The MFCC baseline reads the published audio as recorded. The mean and the standard deviation
+  of each coefficient are taken over every frame of the clip.
 
-`min_seconds` is a preprocessing choice of this pipeline, not a property of the recordings.
+With the bacpipe species classifier off, every bacpipe model gives an embedding for each of the
+20 shortest clips of both species.
 
 ### 8.3 An interrupted checkpoint download becomes permanent
 
