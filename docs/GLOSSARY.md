@@ -14,7 +14,7 @@ The rules that govern how the terms are used are in `docs/WRITING_STANDARD.md`.
 | **call** | One vocalisation. The unit of analysis. |
 | **clip** | One audio file. A clip holds exactly one call from one bird. |
 | **single call** | A clip that holds one call. This is the call set of the main analysis, for both species. |
-| **bout** | A run of several calls from one bird, held in one clip. *Ara ambiguus* has bouts. *Ara glaucogularis* has none. Bouts are scored only in the supplement. |
+| **bout** | A run of several calls from one bird, held in one clip. *Ara ambiguus* has bouts. *Ara glaucogularis* has none. Bouts are not used in this study. |
 | **recording** | One continuous source recording. Calls are cut from a recording. A recording can hold calls from more than one bird. |
 | **recording_id** | The identifier of a recording. This is the unit that the train and test split groups on. |
 | **encounter** | The set of calls from one bird within one recording. |
@@ -29,7 +29,7 @@ The rules that govern how the terms are used are in `docs/WRITING_STANDARD.md`.
 
 | Term | Meaning |
 |---|---|
-| **representation** | One way of turning a clip into a vector. The panel holds 18: 15 pre-trained models and 3 MFCC variants. |
+| **representation** | One way of turning a clip into a vector. The panel holds 18: 15 pre-trained models and 3 MFCC variants. Also called a feature extractor. |
 | **pre-trained model** | A model that was trained on other audio and is used here without further training. |
 | **frozen** | The weights of the model are not changed. Only the small classifier or head on top is fitted. |
 | **embedding** | The output vector of a model for one clip. |
@@ -37,6 +37,8 @@ The rules that govern how the terms are used are in `docs/WRITING_STANDARD.md`.
 | **MFCC** | Mel-frequency cepstral coefficients. A handcrafted description of the shape of the spectrum. The classical baseline of this study. |
 | **CMVN** | Cepstral mean and variance normalisation. Each MFCC coefficient is centred and scaled within one recording. |
 | **probe** | A logistic regression classifier that is fitted to frozen embeddings. It measures whether the identity is present in the embedding. |
+| **classifier** | The method that names the bird from a representation. Three are compared: the probe, the nearest-centroid classifier, and the nearest-centroid classifier after the head. The study compares representations and classifiers. |
+| **nearest-centroid classifier** | Assigns a call to the bird whose prototype is closest by cosine similarity. It fits nothing except the prototypes. |
 | **head** | The small metric-learning network that is trained on top of frozen embeddings. It changes the geometry of the space. |
 | **prototype** | The mean embedding of the calls of one bird. Also called a centroid or a template. |
 
@@ -57,6 +59,7 @@ The rules that govern how the terms are used are in `docs/WRITING_STANDARD.md`.
 | **encounter accuracy** | The accuracy when the calls of one bird within one recording are pooled into one query. It assumes the calls are already grouped by bird. |
 | **open set** | The case in which a test call can come from a bird that was never enrolled. |
 | **enrolment** | The step that stores one prototype for each known bird, before any test call arrives. |
+| **clustering** | Grouping the calls with no labels, with k-means and k equal to the number of birds. Scored with AMI and ARI. |
 | **NMI, AMI, ARI** | Three scores for a clustering against a known grouping. Never report NMI alone, because NMI increases with the number of clusters. |
 
 ## 4. Machine-learning terms in plain words
