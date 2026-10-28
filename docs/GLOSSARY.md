@@ -29,35 +29,35 @@ The rules that govern how the terms are used are in `docs/WRITING_STANDARD.md`.
 
 | Term | Meaning |
 |---|---|
-| **representation** | One way of turning a clip into a vector. The panel holds 18: 15 pre-trained models and 3 MFCC variants. Also called a feature extractor. |
+| **representation** | One way of turning a clip into a vector. The panel holds 18: 15 pre-trained models and 3 MFCC variants. In the manuscript each one is a feature type (Lakdari et al. 2024), and a pre-trained model is a feature extractor. |
 | **pre-trained model** | A model that was trained on other audio and is used here without further training. |
 | **frozen** | The weights of the model are not changed. Only the small classifier or head on top is fitted. |
 | **embedding** | The output vector of a model for one clip. |
 | **family** | The reporting group of a model. Six families: bird-supervised, animal self-supervised, audio self-supervised, audio-text, speech speaker verification, and handcrafted. |
 | **MFCC** | Mel-frequency cepstral coefficients. A handcrafted description of the shape of the spectrum. The classical baseline of this study. |
 | **CMVN** | Cepstral mean and variance normalisation. Each MFCC coefficient is centred and scaled within one recording. |
-| **probe** | A logistic regression classifier that is fitted to frozen embeddings. It measures whether the identity is present in the embedding. |
+| **probe** | A logistic regression classifier that is fitted to frozen embeddings. It measures whether the identity is present in the embedding. In the manuscript: linear probe (Ghani et al. 2023; Hummel et al. 2026). |
 | **classifier** | The method that names the bird from a representation. Three are compared: the probe, the nearest-centroid classifier, and the nearest-centroid classifier after the head. The study compares representations and classifiers. |
 | **nearest-centroid classifier** | Assigns a call to the bird whose prototype is closest by cosine similarity. It fits nothing except the prototypes. |
-| **head** | The small metric-learning network that is trained on top of frozen embeddings. It changes the geometry of the space. |
+| **head** | The small metric-learning network that is trained on top of frozen embeddings. It changes the geometry of the space. In the manuscript: projection head, trained with a prototypical or a supervised contrastive (SupCon) loss. Its own output is evaluated, because the layer below it is the frozen embedding. Training the head is not fine-tuning. |
 | **prototype** | The mean embedding of the calls of one bird. Also called a centroid or a template. |
 
 ## 3. The evaluation
 
 | Term | Meaning |
 |---|---|
-| **split by recording** | The train and test split that uses `GroupKFold` with `recording_id` as the group. No recording appears on both sides. This is the primary result. |
-| **random split** | A stratified split that ignores the recording. It puts calls from one recording on both sides. This result is too high. It is reported only for the comparison. |
-| **leakage** | Information that reaches the test set but that would not be available in real use. Here, the shared acoustic signature of a recording. |
-| **leakage delta** | The random split accuracy minus the by-recording accuracy. The size of the overstatement. |
+| **split by recording** | The train and test split that uses `GroupKFold` with `recording_id` as the group. No recording appears on both sides. This is the primary result. In the manuscript: recording-grouped cross-validation (Roberts et al. 2017). |
+| **random split** | A stratified split that ignores the recording. It puts calls from one recording on both sides. This result is too high. It is reported only for the comparison. In the manuscript: stratified random split. |
+| **leakage** | Information that reaches the test set but that would not be available in real use. Here, the shared acoustic signature of a recording. In the manuscript: data leakage from non-independent training and test calls (Kapoor & Narayanan 2023). |
+| **leakage delta** | The random split accuracy minus the by-recording accuracy. The size of the overstatement. This name is the project's own. The manuscript describes it as the drop in accuracy from the stratified random split to the recording-grouped split. |
 | **calls per recording** | The number of calls cut from one recording. This is the variable that sets the leakage delta. |
-| **domain shift** | The acoustic difference between recordings, from the microphone, the position of the bird, the state of the room, or the time of day. Measured by predicting the recording within one bird. |
+| **domain shift** | The acoustic difference between recordings, from the microphone, the position of the bird, the state of the room, or the time of day. Measured by predicting the recording within one bird. In the manuscript this diagnostic is recording-specific information, not domain shift. Domain shift there means a change between training and test conditions. |
 | **chance level** | The accuracy of a model that has no information. Report the majority-class baseline next to `1 / n_birds`, because `ag` is not balanced. |
 | **verification** | The task of deciding whether two calls come from the same bird. Scored with EER and AUROC. |
 | **EER** | Equal error rate. The verification metric. Lower is better. Chance is 0.5. |
 | **AUROC** | The area under the receiver operating characteristic curve. Higher is better. Chance is 0.5. |
-| **encounter accuracy** | The accuracy when the calls of one bird within one recording are pooled into one query. It assumes the calls are already grouped by bird. |
-| **open set** | The case in which a test call can come from a bird that was never enrolled. |
+| **encounter accuracy** | The accuracy when the calls of one bird within one recording are pooled into one query. It assumes the calls are already grouped by bird. In the manuscript: accuracy after averaging the embeddings of one bird's calls within a recording (as in speaker enrolment, Heigold et al. 2016). Never call it fusion, which in speaker recognition means combining the scores of several systems. |
+| **open set** | The case in which a test call can come from a bird that was never enrolled. In the manuscript: closed-set and open-set, known and unseen individuals. |
 | **enrolment** | The step that stores one prototype for each known bird, before any test call arrives. |
 | **clustering** | Grouping the calls with no labels, with k-means and k equal to the number of birds. Scored with AMI and ARI. |
 | **NMI, AMI, ARI** | Three scores for a clustering against a known grouping. Never report NMI alone, because NMI increases with the number of clusters. |
