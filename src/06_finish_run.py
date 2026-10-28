@@ -143,7 +143,10 @@ def compare_scorings(first, second):
     for column in first.columns:
         if column in common.PROVENANCE_COLUMNS:
             continue
-        unequal = first[column].astype(str) != second[column].astype(str)
+        # Two empty cells are equal. pandas treats NaN as unequal to NaN, so a
+        # plain comparison reports every empty cell as a difference.
+        both_empty = first[column].isna() & second[column].isna()
+        unequal = (first[column].astype(str) != second[column].astype(str)) & ~both_empty
         if unequal.any():
             index = unequal.idxmax()
             differences.append(f"{column}: {first[column][index]!r} against "

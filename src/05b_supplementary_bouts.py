@@ -90,7 +90,7 @@ def main():
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
-        "classify", Path(__file__).resolve().parent / "03_classify.py"
+        "classify", Path(__file__).resolve().parent / "03_score_frozen.py"
     )
     classify = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(classify)
