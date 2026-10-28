@@ -17,7 +17,8 @@ INPUT
 
 OUTPUT
     results/diagnostics/domain_shift.csv        One row for each bird and model.
-    results/diagnostics/within_call_type.csv    One row for each call type.
+    results/diagnostics/within_call_type.csv    One row for each subset and
+                                                call type.
     results/diagnostics/kinship.csv             One row for each model.
     results/diagnostics/split_structure.csv     One row for each species and
                                                 subset.
@@ -49,7 +50,9 @@ THE FOUR DIAGNOSTICS
        Question: which call type separates individuals best?
 
        Method: score individual identification separately for each ag call
-       type, using the session-aware split.
+       type, using the session-aware split. The test runs once for each subset
+       in config.yaml. In the lab subset every bird was recorded in the same
+       room, so the room cannot separate the birds.
 
        Caution: the number of birds differs between call types, so the chance
        level differs too. Compare each call type against its own chance level,
@@ -327,7 +330,23 @@ def session_aware_centroid(features, labels, groups):
     return float(np.mean(accuracies)) if accuracies else float("nan")
 
 
-def within_call_type(frame, species, model):
+def subsets_of(frame, species):
+    """Return (name, rows) for each subset of one species in config.yaml.
+
+    A rule names one column and one value. Stage 3 and stage 4 read the same
+    block, so the subsets match in every stage.
+    """
+    subsets = []
+    for name, rule in CONFIG["subsets"][species].items():
+        if rule is None:
+            subsets.append((name, frame))
+            continue
+        column, value = next(iter(rule.items()))
+        subsets.append((name, frame[frame[column] == value]))
+    return subsets
+
+
+def within_call_type(frame, species, model, subset_name):
     """Score individual identification separately for each call type.
 
     A bird enters a call type only when it has that call type in two or more
@@ -351,6 +370,7 @@ def within_call_type(frame, species, model):
         chance = 1.0 / n_birds
         return {
             "species": species,
+            "subset": subset_name,
             "model": model,
             "call_type": name,
             "n_birds": n_birds,
@@ -521,7 +541,8 @@ def main():
 
             # The within-call-type diagnostic needs more than one call type.
             if frame["call_type"].nunique() > 1:
-                call_type_rows += within_call_type(frame, species, model)
+                for subset_name, subset in subsets_of(frame, species):
+                    call_type_rows += within_call_type(subset, species, model, subset_name)
 
             row = kinship(frame, species, model)
             if row:
