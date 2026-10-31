@@ -593,7 +593,12 @@ def evaluate_model(model, frame, dump=False):
 
     # ---- Evaluation A: closed set, session aware ----------------------------
     def evaluate_a(head_kind):
+        # Every accuracy here is balanced accuracy, scored as in 03_score_frozen.py:
+        # the value is computed over the pooled test predictions of all folds, and
+        # the SD is the spread of the per-fold values. ag is not balanced, so plain
+        # accuracy would not be comparable with the linear probe.
         centroid_acc, knn_acc, encounter_acc = [], [], []
+        pooled = collections.defaultdict(lambda: ([], []))
         eers, aucs, aris, amis = [], [], [], []
 
         for train, test in GroupKFold(N_FOLDS).split(features, labels, groups):
@@ -611,12 +616,13 @@ def evaluate_model(model, frame, dump=False):
 
             if keep.any():
                 predicted = centroid_predict(z_train, labels[train], z_test[keep], enrollable)
-                centroid_acc.append(accuracy_score(labels[test][keep], predicted))
-                knn_acc.append(
-                    accuracy_score(
-                        labels[test][keep], knn_predict(z_train, labels[train], z_test[keep])
-                    )
-                )
+                knn_predicted = knn_predict(z_train, labels[train], z_test[keep])
+                centroid_acc.append(balanced_accuracy_score(labels[test][keep], predicted))
+                knn_acc.append(balanced_accuracy_score(labels[test][keep], knn_predicted))
+                pooled["centroid"][0].extend(labels[test][keep])
+                pooled["centroid"][1].extend(predicted)
+                pooled["knn"][0].extend(labels[test][keep])
+                pooled["knn"][1].extend(knn_predicted)
 
                 # Encounter fusion. The definition matches 03_classify.py, so
                 # the frozen result and the head result are comparable.
@@ -627,11 +633,10 @@ def evaluate_model(model, frame, dump=False):
                     buckets[(bird, recording)].append(vector)
                 query_y = np.array([key[0] for key in buckets])
                 queries = normalize(np.stack([np.mean(v, 0) for v in buckets.values()]))
-                encounter_acc.append(
-                    accuracy_score(
-                        query_y, centroid_predict(z_train, labels[train], queries, enrollable)
-                    )
-                )
+                encounter_predicted = centroid_predict(z_train, labels[train], queries, enrollable)
+                encounter_acc.append(balanced_accuracy_score(query_y, encounter_predicted))
+                pooled["encounter"][0].extend(query_y)
+                pooled["encounter"][1].extend(encounter_predicted)
 
                 if dump:
                     for global_index, prediction in zip(test[keep], predicted):
@@ -659,12 +664,16 @@ def evaluate_model(model, frame, dump=False):
                     (clips[i], labels[i], groups[i], z_test[j]) for j, i in enumerate(test)
                 )
 
+        def pooled_balanced(name):
+            truth, predicted = pooled[name]
+            return balanced_accuracy_score(truth, predicted) if truth else float("nan")
+
         return {
-            "centroid_acc": np.mean(centroid_acc),
+            "centroid_acc": pooled_balanced("centroid"),
             "centroid_acc_sd": np.std(centroid_acc),
-            "knn_acc": np.mean(knn_acc),
+            "knn_acc": pooled_balanced("knn"),
             "knn_acc_sd": np.std(knn_acc),
-            "encounter_acc": np.mean(encounter_acc) if encounter_acc else float("nan"),
+            "encounter_acc": pooled_balanced("encounter"),
             "encounter_acc_sd": np.std(encounter_acc) if encounter_acc else float("nan"),
             "eer": np.nanmean(eers),
             "auc": np.nanmean(aucs),
@@ -680,7 +689,9 @@ def evaluate_model(model, frame, dump=False):
         classifier = LogisticRegression(max_iter=2000, random_state=SEED)
         classifier.fit(scaler.transform(features[train]), labels[train])
         probe_scores.append(
-            accuracy_score(labels[test], classifier.predict(scaler.transform(features[test])))
+            balanced_accuracy_score(
+                labels[test], classifier.predict(scaler.transform(features[test]))
+            )
         )
     probe_ceiling = float(np.mean(probe_scores))
 
