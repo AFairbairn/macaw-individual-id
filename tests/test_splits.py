@@ -19,7 +19,12 @@ WHAT EACH TEST CHECKS
     test_encounter_grouping_is_documented
         Recordings that hold two birds are counted, because the encounter
         metric depends on that count.
+    test_known_split_keeps_recordings_apart
+        In the leave-individuals-out evaluation, no recording of a known bird
+        appears in both the part that trains the head and the part that scores
+        it.
 """
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +35,8 @@ from sklearn.model_selection import GroupKFold
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
+sys.path.insert(0, str(ROOT / "src"))
+import common  # noqa: E402
 
 
 def load_master(species):
@@ -157,3 +164,42 @@ def test_encounter_grouping_is_documented(species):
         f"states {expected[species]}. Update the README and Section 6.4, then "
         f"update this test."
     )
+
+
+@pytest.mark.parametrize("species,subset", ALL_SUBSETS)
+def test_known_split_keeps_recordings_apart(species, subset):
+    """Assert that the known-bird split of evaluation B does not leak.
+
+    The test holds out three birds, as evaluation B does, and divides the
+    calls of the other birds with the function that the pipeline uses. No
+    recording may appear in both parts, every known bird with two or more
+    recordings must have calls in both parts, and every call must be used once.
+    """
+    table = dict(subsets_for(species))[subset]
+    labels = table["bird"].to_numpy()
+    groups = table["recording_id"].to_numpy()
+    generator = np.random.default_rng(CONFIG["seed"])
+    birds = np.unique(labels)
+
+    for _ in range(5):
+        held_out = generator.choice(birds, 3, replace=False)
+        known_index = np.where(~np.isin(labels, held_out))[0]
+        train, test = common.split_known_by_recording(
+            known_index, labels, groups, 0.2, generator
+        )
+
+        shared = set(groups[train]) & set(groups[test])
+        assert not shared, (
+            f"{species}/{subset}: {len(shared)} recording(s) appear in both the "
+            f"train part and the test part. Example: {sorted(shared)[:3]}"
+        )
+        assert sorted(np.concatenate([train, test])) == sorted(known_index), (
+            f"{species}/{subset}: the two parts do not hold every known call once."
+        )
+        for bird in np.unique(labels[known_index]):
+            n_recordings = len(np.unique(groups[known_index][labels[known_index] == bird]))
+            if n_recordings >= 2:
+                assert np.any(labels[train] == bird) and np.any(labels[test] == bird), (
+                    f"{species}/{subset}: bird {bird} has {n_recordings} recordings "
+                    f"but is missing from one part."
+                )

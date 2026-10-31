@@ -54,6 +54,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -292,6 +293,38 @@ def run_record():
         "git_commit": git_commit(),
         "allow_env_drift": False,
     }
+
+
+def split_known_by_recording(index, labels, groups, fraction, generator):
+    """Divide the calls of the known birds into a train part and a test part.
+
+    The division is by recording. All calls of one recording go to the same
+    part, also when the recording holds two birds, so the test part never holds
+    a call from a recording that trained the head. For each bird, the test part
+    holds `fraction` of its recordings, rounded, with at least one recording in
+    each part. A recording that holds two birds is assigned once, by the first
+    bird that reaches it, and counts for both birds. If a bird has only one
+    recording, that recording goes to the train part, unless another bird has
+    already put it in the test part.
+
+    Returns (train index, test index).
+    """
+    part_of = {}
+    for bird in np.unique(labels[index]):
+        recordings = np.unique(groups[index][labels[index] == bird])
+        generator.shuffle(recordings)
+        n_test = min(len(recordings) - 1, max(1, int(round(len(recordings) * fraction))))
+        n_assigned = sum(part_of.get(recording) == "test" for recording in recordings)
+        for recording in recordings:
+            if recording in part_of:
+                continue
+            if n_assigned < n_test:
+                part_of[recording] = "test"
+                n_assigned += 1
+            else:
+                part_of[recording] = "train"
+    is_test = np.array([part_of[recording] == "test" for recording in groups[index]], bool)
+    return index[~is_test], index[is_test]
 
 
 def results_dir():

@@ -92,6 +92,9 @@ THE TWO EVALUATIONS
        never seen. This is the real goal, because a field system meets birds
        that were never enrolled.
 
+       The calls of the known birds are divided by recording. The known side
+       of the comparison is scored on recordings that did not train the head.
+
        This evaluation has high variance with only 8 aa birds. Report the
        standard deviation across repeats, not the mean alone.
 
@@ -154,8 +157,9 @@ KNN_K = SETTINGS["knn_k"]
 FEW_SHOT_SHOTS = SETTINGS["few_shot_shots"]
 N_OSCR_THRESHOLDS = SETTINGS["oscr_thresholds"]
 
-# The share of each known bird's calls that is held back to score the
-# known side of the known-against-novel comparison.
+# The share of each known bird's recordings that is held back to score the
+# known side of the known-against-novel comparison. The division is by
+# recording, so no recording trains the head and also scores it.
 KNOWN_TEST_FRACTION = 0.2
 
 # The number of support-set resamples in the few-shot test.
@@ -709,19 +713,12 @@ def evaluate_model(model, frame, dump=False):
             known_classes = np.unique(labels[~is_novel])
 
             # Split the known calls into a part that trains the head and a part
-            # that is held back. The head never sees the held-back part, so the
-            # known side of the open-set comparison is scored on unseen calls.
+            # that is held back. The split is by recording, so the known side of
+            # the open-set comparison is scored on recordings the head never saw.
             known_index = np.where(~is_novel)[0]
-            train_parts, test_parts = [], []
-            for bird in known_classes:
-                bird_index = known_index[labels[known_index] == bird].copy()
-                few_shot_generator.shuffle(bird_index)
-                cut = max(1, int(round(len(bird_index) * (1 - KNOWN_TEST_FRACTION))))
-                train_parts.append(bird_index[:cut])
-                test_parts.append(bird_index[cut:])
-
-            known_train = np.concatenate(train_parts)
-            known_test = np.concatenate(test_parts)
+            known_train, known_test = common.split_known_by_recording(
+                known_index, labels, groups, KNOWN_TEST_FRACTION, few_shot_generator
+            )
 
             preprocess = make_preprocessor(features[known_train])
             x_known_train = preprocess(features[known_train])
