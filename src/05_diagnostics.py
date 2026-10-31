@@ -22,11 +22,13 @@ OUTPUT
     results/diagnostics/kinship.csv             One row for each model.
     results/diagnostics/split_structure.csv     One row for each species and
                                                 subset.
+    results/diagnostics/learning_curve.csv      One row for each subset, model
+                                                and number of training calls.
 
 NOTE
     This script writes CSV files. Figures are made separately from them.
 
-THE FOUR DIAGNOSTICS
+THE FIVE DIAGNOSTICS
 
     1. Domain shift
        Question: do recordings carry an acoustic signature that a model could
@@ -138,6 +140,16 @@ THE FOUR DIAGNOSTICS
        count, call types, calls per bird, calls per recording, recordist,
        equipment, room and season. No design matches all of those at once, so
        the species difference is descriptive and not causal.
+
+    5. Learning curve
+       Question: would more calls per bird raise identification accuracy?
+
+       Method: score the linear probe on the recording-grouped folds with the
+       training calls reduced to a fixed number per bird, drawn at random and
+       repeated. The test calls are never reduced. See learning_curve().
+
+       Caution: the curve can only reach the number of training calls of the
+       bird with the fewest. It tests calls per bird, not the number of birds.
 """
 import os
 from pathlib import Path
@@ -146,7 +158,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, balanced_accuracy_score
 from sklearn.model_selection import GroupKFold, StratifiedKFold
 from sklearn.preprocessing import LabelEncoder, StandardScaler, normalize
 
@@ -168,6 +180,11 @@ MIN_CALLS_FOR_RECORDING = 3
 
 # The number of label shuffles in the kinship permutation test.
 N_PERMUTATIONS = 2000
+
+# Diagnostic 5. The numbers of training calls per bird that the learning curve
+# scores, and the number of random draws at each size.
+LEARNING_CURVE_SIZES = [5, 10, 15, 20, 30, 40]
+LEARNING_CURVE_DRAWS = 10
 
 
 def load_clips(species, model):
@@ -328,6 +345,77 @@ def session_aware_centroid(features, labels, groups):
         accuracies.append(accuracy_score(codes[test], predicted))
 
     return float(np.mean(accuracies)) if accuracies else float("nan")
+
+
+def learning_curve(frame, species, model, subset_name):
+    """Score the linear probe with fewer and fewer training calls per bird.
+
+    Question: would more calls per bird raise identification accuracy?
+
+    Method: the folds are the same recording-grouped folds as the main
+    analysis, so no recording is on both sides. In each fold, the training
+    calls are reduced to the same number of calls for every bird, drawn at
+    random. The test calls are never reduced. The draw is repeated, and the
+    balanced accuracy is computed over the pooled test predictions of the five
+    folds for each draw. A size is scored only if every bird has that many
+    training calls in every fold. The last row of each subset and model uses
+    all training calls.
+
+    If accuracy still rises at the largest size, more calls per bird would
+    raise it further. If it has levelled off, the number of calls per bird does
+    not limit the result.
+    """
+    features = np.stack(frame["embedding"].to_list())
+    labels = frame["bird"].to_numpy()
+    groups = frame["recording"].to_numpy()
+    folds = list(GroupKFold(N_FOLDS).split(features, labels, groups))
+
+    smallest = min(
+        int(pd.Series(labels[train]).value_counts().reindex(np.unique(labels), fill_value=0).min())
+        for train, _ in folds
+    )
+    sizes = [n for n in LEARNING_CURVE_SIZES if n <= smallest] + [None]
+    generator = np.random.default_rng(SEED)
+    rows = []
+
+    for size in sizes:
+        draws = 1 if size is None else LEARNING_CURVE_DRAWS
+        scores = []
+        for _ in range(draws):
+            truth, predicted = [], []
+            for train, test in folds:
+                if size is None:
+                    chosen = train
+                else:
+                    chosen = np.concatenate([
+                        generator.choice(train[labels[train] == bird], size, replace=False)
+                        for bird in np.unique(labels)
+                    ])
+                scaler = StandardScaler().fit(features[chosen])
+                model_fit = LogisticRegression(max_iter=1500, random_state=SEED)
+                model_fit.fit(scaler.transform(features[chosen]), labels[chosen])
+                truth += list(labels[test])
+                predicted += list(model_fit.predict(scaler.transform(features[test])))
+            scores.append(balanced_accuracy_score(truth, predicted))
+        rows.append(
+            {
+                "species": species,
+                "subset": subset_name,
+                "model": model,
+                "calls_per_bird": "all" if size is None else size,
+                # For "all", the mean number of training calls per bird over the
+                # folds, so the last point of the curve can be placed on the axis.
+                "training_calls_per_bird": float(size) if size is not None else float(np.mean([
+                    pd.Series(labels[train]).value_counts().mean() for train, _ in folds
+                ])),
+                "n_birds": int(len(np.unique(labels))),
+                "n_draws": draws,
+                "balanced_accuracy": float(np.mean(scores)),
+                "balanced_accuracy_sd": float(np.std(scores)),
+                "chance": 1.0 / len(np.unique(labels)),
+            }
+        )
+    return rows
 
 
 def subsets_of(frame, species):
@@ -521,7 +609,7 @@ def split_structure(species):
 # =============================================================================
 
 def main():
-    shift_rows, call_type_rows, kinship_rows = [], [], []
+    shift_rows, call_type_rows, kinship_rows, curve_rows = [], [], [], []
 
     for species in CONFIG["species"]:
         for model in MODELS:
@@ -544,6 +632,9 @@ def main():
                 for subset_name, subset in subsets_of(frame, species):
                     call_type_rows += within_call_type(subset, species, model, subset_name)
 
+            for subset_name, subset in subsets_of(frame, species):
+                curve_rows += learning_curve(subset, species, model, subset_name)
+
             row = kinship(frame, species, model)
             if row:
                 kinship_rows.append(row)
@@ -554,6 +645,7 @@ def main():
     pd.DataFrame(shift_rows).to_csv(out_dir / "domain_shift.csv", index=False)
     pd.DataFrame(call_type_rows).to_csv(out_dir / "within_call_type.csv", index=False)
     pd.DataFrame(kinship_rows).to_csv(out_dir / "kinship.csv", index=False)
+    pd.DataFrame(curve_rows).to_csv(out_dir / "learning_curve.csv", index=False)
 
     # Diagnostic 4. Metadata only, so it always runs.
     structure_rows = []
@@ -566,6 +658,7 @@ def main():
     print(f"  domain_shift.csv     {len(shift_rows)} rows")
     print(f"  within_call_type.csv {len(call_type_rows)} rows")
     print(f"  kinship.csv          {len(kinship_rows)} rows")
+    print(f"  learning_curve.csv   {len(curve_rows)} rows")
     print(f"  split_structure.csv      {len(structure_rows)} rows")
     print()
     print("Split structure (how much a random split can inflate a result):")
